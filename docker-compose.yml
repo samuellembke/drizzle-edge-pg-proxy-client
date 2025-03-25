@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: drizzle-edge-pg-proxy-client:bun
     container_name: pg-proxy
     environment:
       - NODE_ENV=production

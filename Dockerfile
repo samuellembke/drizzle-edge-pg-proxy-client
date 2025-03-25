@@ -1,30 +1,24 @@
-FROM node:20-alpine AS builder
+FROM oven/bun:1 AS builder
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm
-
 # Copy package files
 COPY package.json ./
-COPY pnpm-lock.yaml ./
+COPY bun.lock ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN bun install
 
 # Copy project files
 COPY . .
 
 # Build the application
-RUN pnpm build
+RUN bun run build
 
 # Production stage
-FROM node:20-alpine AS runner
+FROM oven/bun:1-slim AS runner
 
 WORKDIR /app
-
-# Install pnpm
-RUN npm install -g pnpm
 
 # Set production environment
 ENV NODE_ENV=production
@@ -35,7 +29,7 @@ COPY --from=builder /app/docker/src ./src
 COPY --from=builder /app/package.json ./
 
 # Install only production dependencies
-RUN pnpm install --prod
+RUN bun install --production
 
 # Expose port
 EXPOSE 8080
@@ -45,4 +39,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
 # Start the server
-CMD ["node", "src/index.js"]
+CMD ["bun", "src/index.js"]

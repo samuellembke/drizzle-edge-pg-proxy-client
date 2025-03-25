@@ -1,8 +1,8 @@
-'use strict';
+import Fastify from 'fastify';
+import pg from 'pg';
+import fastifyCompress from '@fastify/compress';
 
-const fastify = require('fastify');
-const { Pool } = require('pg');
-const fastifyCompress = require('@fastify/compress');
+const { Pool } = pg;
 
 // Configuration
 const config = {
@@ -23,7 +23,7 @@ const config = {
 };
 
 // Create the app
-const app = fastify({
+const app = Fastify({
   logger: true,
   trustProxy: true,
   // Increase the JSON body size limit if needed
@@ -32,7 +32,7 @@ const app = fastify({
 
 // Enable compression for responses
 if (config.enableCompression) {
-  app.register(fastifyCompress);
+  await app.register(fastifyCompress);
 }
 
 // Create PostgreSQL connection pool
@@ -41,8 +41,6 @@ const pool = new Pool({
   min: config.database.pool.min,
   max: config.database.pool.max,
   idleTimeoutMillis: config.database.pool.idleTimeoutMillis,
-  // Use native PostgreSQL binding for better performance
-  native: true,
 });
 
 // Handle pool errors
@@ -177,8 +175,6 @@ const start = async () => {
   }
 };
 
-start();
-
 // Handle graceful shutdown
 const shutdown = async () => {
   app.log.info('Shutting down server...');
@@ -190,3 +186,6 @@ const shutdown = async () => {
 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Start the server
+start();
