@@ -1,0 +1,177 @@
+# High-Performance PostgreSQL HTTP Proxy
+
+This directory contains a high-performance PostgreSQL HTTP proxy implementation using Docker and Docker Compose. The proxy is built with Fastify and uses pg-native for optimal performance when communicating with PostgreSQL.
+
+## Features
+
+- **High Performance**: Built with Fastify, significantly faster than Express.js
+- **Connection Pooling**: Pre-configured connection pool for optimal database performance
+- **Native PostgreSQL Driver**: Uses pg-native for better performance
+- **Response Compression**: Optional gzip compression for smaller response sizes
+- **Authentication**: Secure your proxy with token-based authentication
+- **Graceful Shutdown**: Proper handling of shutdown signals
+- **Health Checks**: Built-in health check endpoint
+- **Docker Ready**: Easy deployment with Docker and Docker Compose
+- **PostgreSQL Included**: Bundled PostgreSQL database for quick testing
+
+## Requirements
+
+- Docker
+- Docker Compose
+
+## Quick Start
+
+1. Create a `.env` file in the `docker` directory with your configuration:
+
+```env
+AUTH_TOKEN=your-secret-token
+```
+
+2. Start the proxy and PostgreSQL database:
+
+```bash
+cd docker
+docker-compose up -d
+```
+
+3. Use the client library to connect to your proxy:
+
+```typescript
+import { drizzle } from 'drizzle-edge-pg-proxy-client';
+import { users } from './schema';
+
+const db = drizzle({
+  proxyUrl: 'http://localhost:8080',
+  authToken: 'your-secret-token',
+  schema: { users },
+});
+
+const allUsers = await db.select().from(users);
+```
+
+## Configuration
+
+The proxy can be configured using environment variables in the docker-compose.yml file:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | `postgres://postgres:postgres@postgres:5432/postgres` |
+| `AUTH_TOKEN` | Authentication token | None (auth disabled) |
+| `PORT` | HTTP port to listen on | `8080` |
+| `DB_POOL_MIN` | Minimum pool size | `5` |
+| `DB_POOL_MAX` | Maximum pool size | `20` |
+| `DB_POOL_IDLE_TIMEOUT` | Idle timeout in ms | `10000` |
+| `ENABLE_COMPRESSION` | Enable response compression | `true` |
+| `NODE_OPTIONS` | Node.js options | `--max-old-space-size=2048` |
+
+## API Endpoints
+
+### Health Check
+
+```
+GET /health
+```
+
+Returns `{"status":"ok"}` if the service is healthy.
+
+### Execute Query
+
+```
+POST /query
+```
+
+Body:
+```json
+{
+  "sql": "SELECT * FROM users WHERE id = $1",
+  "params": [1],
+  "method": "all"
+}
+```
+
+- `sql`: SQL query to execute
+- `params`: Array of parameters
+- `method`: Result method, either "all" (default) or "single"
+
+### Execute Transaction
+
+```
+POST /transaction
+```
+
+Body:
+```json
+{
+  "queries": [
+    {
+      "sql": "INSERT INTO users (name, email) VALUES ($1, $2)",
+      "params": ["Alice", "alice@example.com"],
+      "method": "all"
+    },
+    {
+      "sql": "UPDATE users SET name = $1 WHERE id = $2",
+      "params": ["Bob", 1],
+      "method": "all"
+    }
+  ]
+}
+```
+
+## Performance Tuning
+
+This proxy is configured for high performance, but you can tune it further:
+
+1. **Connection Pool**: Adjust the `DB_POOL_MIN` and `DB_POOL_MAX` based on your workload
+2. **Memory**: Adjust `NODE_OPTIONS` if you need more memory
+3. **CPU**: Add more CPU resources to the container in docker-compose.yml
+
+## Production Deployment
+
+For production deployments, we recommend:
+
+1. **Reverse Proxy**: Use Nginx as a reverse proxy (we provide a [sample configuration](./nginx.conf))
+2. **TLS/SSL**: Enable HTTPS in your reverse proxy
+3. **Managed Database**: Use a managed PostgreSQL service instead of the bundled one
+4. **Monitoring**: Set up proper monitoring and logging (e.g., Prometheus, Grafana)
+5. **High Availability**: Run multiple replicas of the proxy behind a load balancer
+6. **Security**: Use a strong authentication token and restrict network access
+7. **Resource Tuning**: Adjust container resources based on your workload
+
+### Load Testing
+
+To ensure your deployment can handle the expected load, you can use the included load testing script:
+
+```bash
+# Install autocannon
+npm install -g autocannon
+
+# Run the load test
+node load-test.js
+```
+
+This will simulate 100 concurrent users making requests to your proxy for 10 seconds and report throughput and latency metrics.
+
+### Nginx Configuration
+
+We provide a sample [Nginx configuration](./nginx.conf) that includes:
+
+- Reverse proxy setup
+- HTTP/2 support
+- SSL/TLS with recommended settings
+- HSTS for secure connections
+- Rate limiting to prevent abuse
+- Response caching where appropriate
+- Security headers
+
+To use it:
+
+1. Copy the configuration to your Nginx server
+2. Adjust the server name and paths
+3. Uncomment the HTTPS section and provide SSL certificates
+4. Reload Nginx
+
+## Building Custom Images
+
+```bash
+docker build -t pg-edge-proxy -f docker/Dockerfile .
+```

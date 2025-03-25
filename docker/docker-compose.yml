@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  pg-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: pg-proxy
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres
+      - AUTH_TOKEN=${AUTH_TOKEN:-}
+      - PORT=8080
+      # Performance tuning
+      - NODE_OPTIONS=--max-old-space-size=2048
+      # Database connection pool
+      - DB_POOL_MIN=5
+      - DB_POOL_MAX=20
+      - DB_POOL_IDLE_TIMEOUT=10000
+      # Enable response compression
+      - ENABLE_COMPRESSION=true
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

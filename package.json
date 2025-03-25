@@ -1,0 +1,59 @@
+{
+  "name": "drizzle-edge-pg-proxy-client",
+  "version": "0.1.0",
+  "description": "Client for Drizzle PostgreSQL edge proxy in edge environments",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "keywords": [
+    "drizzle",
+    "postgresql",
+    "edge",
+    "serverless",
+    "http",
+    "database"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "eslint . --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "@tanstack/config": "^0.18.0",
+    "@types/bun": "latest",
+    "@types/node": "^22.13.13",
+    "@typescript-eslint/eslint-plugin": "^8.28.0",
+    "@typescript-eslint/parser": "^8.28.0",
+    "drizzle-orm": "^0.41.0",
+    "eslint": "^8.57.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "^0.32.0",
+    "typescript": "^5.8.2"
+  }
+}

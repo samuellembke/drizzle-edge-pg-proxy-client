@@ -1,0 +1,16 @@
+{
+  "name": "pg-edge-proxy",
+  "version": "1.0.0",
+  "description": "High-performance PostgreSQL HTTP proxy for edge environments",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@fastify/compress": "^6.4.0",
+    "fastify": "^4.26.1",
+    "pg": "^8.11.3",
+    "pg-native": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
