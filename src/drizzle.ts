@@ -1,5 +1,5 @@
 import { drizzle as drizzleOrm } from 'drizzle-orm/neon-http';
-import { createPgHttpClient } from './client/pg-http-client';
+import { createPgHttpClient, TypeParser } from './client/pg-http-client';
 
 /**
  * Creates a Drizzle client connecting to PostgreSQL via HTTP proxy.
@@ -13,14 +13,28 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
   authToken?: string;
   schema: TSchema;
   fetch?: typeof globalThis.fetch;
+  arrayMode?: boolean;
+  fullResults?: boolean;
+  typeParser?: TypeParser | Record<number, (value: string) => any>;
 }) {
-  const { proxyUrl, authToken, schema, fetch } = options;
+  const { 
+    proxyUrl, 
+    authToken, 
+    schema, 
+    fetch, 
+    arrayMode = false,
+    fullResults = false,
+    typeParser 
+  } = options;
 
   // Create our custom HTTP client that mirrors Neon's client interface exactly
   const pgClient = createPgHttpClient({ 
     proxyUrl, 
     authToken, 
-    fetch 
+    fetch,
+    arrayMode,
+    fullResults,
+    typeParser
   });
 
   // Create a drizzle instance using our client
@@ -55,6 +69,14 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
     configurable: true,
     writable: false,
     value: pgClient
+  });
+  
+  // Expose the type parser for custom type handling
+  Object.defineProperty(db, 'typeParser', {
+    enumerable: true,
+    configurable: true,
+    writable: false,
+    value: pgClient.typeParser
   });
 
   return db;

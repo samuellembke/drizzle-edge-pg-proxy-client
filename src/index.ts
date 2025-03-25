@@ -8,5 +8,16 @@
  */
 
 export { drizzle } from './drizzle';
-export { createPgHttpClient } from './client/pg-http-client';
+export { 
+  createPgHttpClient, 
+  TypeParser, 
+  PgTypeId, 
+  PgError, 
+  UnsafeRawSql,
+  type PgQueryResult,
+  type PgField,
+  type ParameterizedQuery,
+  type SQLTemplateTag,
+  type ClientOptions
+} from './client/pg-http-client';
 export * from './types';

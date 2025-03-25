@@ -26,11 +26,11 @@ This document outlines the improvements needed to bring our `drizzle-edge-pg-pro
 ## Type System Integration
 
 - [x] Implement proper type mapping between PostgreSQL and JavaScript types
-- [ ] Add support for custom type parsers
-- [ ] Handle array types properly
-- [ ] Add proper timestamp/date handling with timezone awareness
-- [ ] Support for numeric types with precision
-- [ ] Handle JSON/JSONB types correctly
+- [x] Add support for custom type parsers
+- [ ] Handle array types properly with element type parsing
+- [x] Add proper timestamp/date handling with timezone awareness
+- [x] Support for numeric types with precision
+- [x] Handle JSON/JSONB types correctly
 
 ## Query Features
 

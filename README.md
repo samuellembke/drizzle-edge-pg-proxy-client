@@ -244,6 +244,9 @@ function drizzle<TSchema extends Record<string, unknown>>(options: {
   authToken?: string;
   schema: TSchema;
   fetch?: typeof globalThis.fetch;
+  arrayMode?: boolean;
+  fullResults?: boolean;
+  typeParser?: TypeParser | Record<number, (value: string) => any>;
 }): PostgresJsDatabase<TSchema>
 ```
 
@@ -255,21 +258,25 @@ Creates a Drizzle ORM client connected to your PostgreSQL database via an HTTP p
   - `authToken` (optional): Authentication token for the proxy server
   - `schema`: Drizzle ORM schema definition
   - `fetch` (optional): Custom fetch implementation (uses global fetch by default)
+  - `arrayMode` (optional): When true, returns results as arrays instead of objects
+  - `fullResults` (optional): When true, returns complete result objects with metadata
+  - `typeParser` (optional): Custom type parser instance or type parser configuration
 
 **Returns:** Drizzle ORM database client
 
 ### createPgHttpClient
 
 ```typescript
-function createPgHttpClient({
-  proxyUrl,
-  authToken,
-  fetch,
-}: {
+function createPgHttpClient(options: ClientOptions): PgHttpClient
+
+interface ClientOptions {
   proxyUrl: string;
   authToken?: string;
   fetch?: typeof globalThis.fetch;
-}): PgHttpClient
+  arrayMode?: boolean;
+  fullResults?: boolean;
+  typeParser?: TypeParser | Record<number, (value: string) => any>;
+}
 ```
 
 Creates a raw PostgreSQL HTTP client.
@@ -278,12 +285,90 @@ Creates a raw PostgreSQL HTTP client.
 - `proxyUrl`: URL of the PostgreSQL HTTP proxy server
 - `authToken` (optional): Authentication token for the proxy server
 - `fetch` (optional): Custom fetch implementation (uses global fetch by default)
+- `arrayMode` (optional): When true, returns results as arrays instead of objects
+- `fullResults` (optional): When true, returns complete result objects with metadata
+- `typeParser` (optional): Custom type parser instance or type parser configuration
 
 **Returns:** A client with the following methods:
-- `execute(query: string, params?: unknown[]): Promise<any[]>`: Execute a SQL query with parameters
-- `sql(strings: TemplateStringsArray, ...values: unknown[]): SqlQueryResult`: Create a SQL template literal query
-- `transaction(queries: { text: string, values: unknown[] }[]): Promise<any[]>`: Execute multiple queries in a transaction
-- `query(query: string, params?: unknown[]): Promise<any[]>`: Alias for execute
+- `execute(query: string, params?: unknown[]): Promise<PgQueryResult>`: Execute a SQL query with parameters
+- `sql(strings: TemplateStringsArray, ...values: unknown[]): QueryPromise<PgQueryResult>`: Create a SQL template literal query
+- `transaction(queries: { text: string, values: unknown[] }[], options?): Promise<PgQueryResult[]>`: Execute multiple queries in a transaction
+- `query(query: string, params?: unknown[], options?): Promise<PgQueryResult>`: Direct query execution with options
+- `unsafe(rawSql: string): UnsafeRawSql`: Create unsafe raw SQL for trusted inputs
+- `typeParser`: Access to the type parser instance for custom type handling
+
+### TypeParser
+
+```typescript
+class TypeParser {
+  constructor(customTypes?: Record<number, (value: string) => any>);
+  
+  // Add or override a type parser
+  setTypeParser(typeId: number, parseFn: (value: string) => any): void;
+  
+  // Get a parser function for a specific type
+  getTypeParser(typeId: number): (value: string) => any;
+}
+```
+
+Custom type parser for PostgreSQL data types.
+
+**Example: Using a custom type parser**
+
+```typescript
+import { createPgHttpClient, TypeParser, PgTypeId } from 'drizzle-edge-pg-proxy-client';
+
+// Create a custom type parser
+const customTypeParser = new TypeParser();
+
+// Override the default date parser to use a custom format
+customTypeParser.setTypeParser(PgTypeId.DATE, (dateStr) => {
+  return new Date(dateStr + 'T00:00:00Z');
+});
+
+// Add a parser for a custom type
+customTypeParser.setTypeParser(1234, (value) => {
+  return JSON.parse(value); // Example: parse a custom JSON type
+});
+
+// Use the custom type parser with the client
+const client = createPgHttpClient({
+  proxyUrl: 'https://your-pg-proxy-url.com',
+  typeParser: customTypeParser
+});
+
+// Or pass a type parser configuration directly
+const client2 = createPgHttpClient({
+  proxyUrl: 'https://your-pg-proxy-url.com',
+  typeParser: {
+    [PgTypeId.DATE]: (dateStr) => new Date(dateStr + 'T00:00:00Z'),
+    [PgTypeId.JSON]: (jsonStr) => JSON.parse(jsonStr)
+  }
+});
+```
+
+**PgTypeId**
+
+The `PgTypeId` enum provides constants for all standard PostgreSQL data type OIDs:
+
+```typescript
+enum PgTypeId {
+  BOOL = 16,
+  BYTEA = 17,
+  INT8 = 20,
+  INT2 = 21,
+  INT4 = 23,
+  TEXT = 25,
+  JSON = 114,
+  JSONB = 3802,
+  FLOAT4 = 700,
+  FLOAT8 = 701,
+  DATE = 1082,
+  TIMESTAMP = 1114,
+  TIMESTAMPTZ = 1184,
+  // ... and many more
+}
+```
 
 ## 🔄 Setting Up a PostgreSQL HTTP Proxy
 
@@ -401,7 +486,17 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.0 (Latest)
+### Version 0.2.1 (Latest)
+
+This version adds comprehensive type system support:
+
+- ✅ **TypeParser Class**: Added a robust type parser system for PostgreSQL data types
+- ✅ **Custom Type Parsers**: Support for user-defined type parsers
+- ✅ **Default Parsers**: Built-in parsers for common PostgreSQL types (numeric, date/time, JSON, etc.)
+- ✅ **Query Result Processing**: Automatic type conversion of query results based on column data types
+- ✅ **Advanced Configuration**: New options for array mode and full results format
+
+### Version 0.2.0
 
 This version provides significant improvements to match Neon's client interface:
 
