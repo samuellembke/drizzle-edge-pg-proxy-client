@@ -8,6 +8,10 @@ dist
 build
 .turbo
 
+# Neon repos
+serverless
+neon
+
 # Testing
 coverage
 

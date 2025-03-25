@@ -1,7 +1,7 @@
 /**
  * Creates a custom HTTP client for PostgreSQL that works in edge environments
  * This implementation mirrors Neon's HTTP client interface to ensure compatibility
- * with drizzle-orm and other tools that expect the Neon client.
+ * with drizzle-orm, Auth.js and other tools that expect the Neon client.
  */
 
 // Define basic types based on Neon's HTTP client
@@ -18,17 +18,22 @@ export interface ParameterizedQuery {
   params: any[];
 }
 
+// Class for RAW SQL representation
+export class UnsafeRawSql {
+  constructor(public sql: string) {}
+}
+
 // This is used to tag template literals in SQL queries
 export type SQLTemplateTag = (strings: TemplateStringsArray, ...values: any[]) => QueryPromise<PgQueryResult>;
 
 // Create a class implementing Promise for SQL queries with expanded functionality to match Neon's
 export class QueryPromise<T = any> implements Promise<T> {
   readonly [Symbol.toStringTag]: string = 'Promise';
-  public queryData: { query: string; params: any[] };
+  public queryData: ParameterizedQuery;
 
   constructor(
     private executeFn: (query: string, params: any[]) => Promise<T>,
-    queryObj: { query: string; params: any[] }
+    queryObj: ParameterizedQuery
   ) {
     this.queryData = queryObj;
   }
@@ -145,10 +150,10 @@ export function createPgHttpClient({
       // Match Neon's result format, which is what drizzle-orm/neon-http expects
       return {
         command,
-        fields: [],
+        fields: result?.fields || [],
         rowCount: Array.isArray(rows) ? rows.length : 0,
         rows: rows,
-        rowAsArray: false
+        rowAsArray: result?.rowAsArray || false
       };
     } catch (error) {
       console.error('Error connecting to PostgreSQL HTTP proxy:', error);
@@ -156,44 +161,49 @@ export function createPgHttpClient({
     }
   };
 
-  // SQL tag template for handling raw SQL queries
-  const sql = (strings: TemplateStringsArray, ...values: unknown[]): QueryPromise<PgQueryResult> => {
-    let query = strings[0] || '';
-    const params: unknown[] = [];
+  /**
+   * Helper to convert SqlTemplate to ParameterizedQuery
+   * This mirrors Neon's sqlTemplate.toParameterizedQuery
+   */
+  const toParameterizedQuery = (
+    strings: TemplateStringsArray, 
+    values: any[]
+  ): ParameterizedQuery => {
+    let query = '';
+    const params: any[] = [];
 
-    for (let i = 0; i < values.length; i++) {
-      // Check if the value is a special object
-      const value = values[i];
-      
-      // Handle raw SQL specially
-      if (value && typeof value === 'object' && 'sql' in value && typeof value.sql === 'string') {
-        query += value.sql;
-      } else if (value instanceof QueryPromise) {
-        // Handle nested query case (similar to Neon)
-        if (value.queryData) {
-          // Try to inline the query directly - this is a simplified version
-          // Full implementation would need recursive handling
-          query += value.queryData.query;
+    for (let i = 0, len = strings.length; i < len; i++) {
+      query += strings[i];
+      if (i < values.length) {
+        const value = values[i];
+        
+        // Handle different value types
+        if (value instanceof UnsafeRawSql) {
+          query += value.sql;
+        } else if (value instanceof QueryPromise) {
+          if (value.queryData) {
+            // Inline the query text but not params
+            query += value.queryData.query;
+          } else {
+            throw new Error('This query is not composable');
+          }
         } else {
-          // Fallback to parameter binding
           params.push(value);
           query += `$${params.length}`;
         }
-      } else {
-        // Regular parameter binding
-        params.push(value);
-        query += `$${params.length}`;
       }
-      
-      // Add the next string part
-      query += strings[i + 1] || '';
     }
-
-    // Return a query promise with the prepared query
-    return new QueryPromise(execute, { query, params });
+    
+    return { query, params };
   };
 
-  // Transaction handling - simplified to match Neon's approach
+  // SQL tag template for handling raw SQL queries
+  const sql = (strings: TemplateStringsArray, ...values: unknown[]): QueryPromise<PgQueryResult> => {
+    const parameterizedQuery = toParameterizedQuery(strings, values);
+    return new QueryPromise(execute, parameterizedQuery);
+  };
+
+  // Transaction handling
   const transaction = async (queries: { text: string, values: unknown[] }[]): Promise<PgQueryResult[]> => {
     try {
       // Format queries for the transaction
@@ -226,7 +236,14 @@ export function createPgHttpClient({
         throw new Error(`PostgreSQL HTTP transaction error: ${errorMessage}`);
       }
 
-      const results = await response.json() as any[];
+      // Parse results from response
+      let results: any[] = [];
+      try {
+        const json = await response.json() as any;
+        results = json.results || json;
+      } catch (error) {
+        throw new Error(`Error parsing transaction response: ${error}`);
+      }
       
       // Format each result to match what Neon returns
       const formattedResults = Array.isArray(results) ? results.map((rows, i) => {
@@ -240,10 +257,10 @@ export function createPgHttpClient({
         
         return {
           command,
-          fields: [],
-          rowCount: Array.isArray(rows) ? rows.length : 0,
-          rows: rows,
-          rowAsArray: false
+          fields: rows.fields || [],
+          rowCount: Array.isArray(rows.rows || rows) ? (rows.rows || rows).length : 0,
+          rows: rows.rows || rows,
+          rowAsArray: rows.rowAsArray || false
         };
       }) : [];
       
@@ -258,22 +275,16 @@ export function createPgHttpClient({
   const query = async (queryText: string, params: any[] = []): Promise<PgQueryResult> => {
     return execute(queryText, params);
   };
-
-  // Raw SQL support class
-  class UnsafeRawSql {
-    constructor(public sql: string) {}
-  }
   
-  // Unsafe query builder
+  // Unsafe query builder - create raw SQL that won't be escaped
   const unsafe = (rawSql: string) => new UnsafeRawSql(rawSql);
 
-  // Return the client interface that matches Neon's
+  // Return the client interface that exactly matches Neon's
   return {
     execute,      // Execute method
-    query,        // Direct query method
+    query,        // Direct query method used by Auth.js
     sql,          // SQL template tag
     unsafe,       // For unsafe raw SQL
     transaction,  // For transactions
-    UnsafeRawSql, // Raw SQL class
   };
 }
