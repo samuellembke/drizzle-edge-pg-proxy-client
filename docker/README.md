@@ -29,6 +29,12 @@ DATABASE_URL=postgres://username:password@your-postgres-host:5432/database
 
 # Optional: Authentication token for proxy security
 AUTH_TOKEN=your-secret-token
+
+# Optional: Configure the exposed port on your host machine
+HTTP_PORT=7432
+
+# Optional: Configure the port inside the container
+CONTAINER_PORT=8080
 ```
 
 2. Start the proxy:

@@ -288,7 +288,7 @@ cd drizzle-edge-pg-proxy-client
 docker-compose up -d
 ```
 
-Now you can connect to your proxy at `http://localhost:8080` and start using it with the client.
+Now you can connect to your proxy at `http://localhost:7432` and start using it with the client.
 
 For more information, see the [Docker README](./docker/README.md).
 
@@ -306,6 +306,8 @@ This repository is configured for easy deployment with platforms like Coolify. T
 2. Set up the required environment variables:
    - `DATABASE_URL` - Connection string to your PostgreSQL database
    - `AUTH_TOKEN` - (Optional) Secret token for proxy authentication
+   - `HTTP_PORT` - (Optional) External port for the proxy (default: 7432)
+   - `CONTAINER_PORT` - (Optional) Internal container port (default: 8080)
 3. Deploy the application
 
 **Important**: You must provide your own PostgreSQL database. The proxy service will connect to your existing database using the `DATABASE_URL` environment variable.

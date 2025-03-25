@@ -12,7 +12,7 @@ services:
       # Database connection - this should be set in Coolify
       - DATABASE_URL=${DATABASE_URL}
       - AUTH_TOKEN=${AUTH_TOKEN:-}
-      - PORT=8080
+      - PORT=${CONTAINER_PORT:-8080}
       # Performance tuning
       - NODE_OPTIONS=--max-old-space-size=2048
       # Database connection pool
@@ -22,9 +22,9 @@ services:
       # Enable response compression
       - ENABLE_COMPRESSION=true
     ports:
-      - "8080:8080"
+      - "${HTTP_PORT:-7432}:${CONTAINER_PORT:-8080}"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${CONTAINER_PORT:-8080}/health"]
       interval: 30s
       timeout: 5s
       retries: 3
