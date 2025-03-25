@@ -162,21 +162,28 @@ app.post('/query', async (request, reply) => {
   // Log query for debugging (helpful for Auth.js issues)
   request.log.debug({ sql, params }, 'Executing query');
   
-  // Special handling for Auth.js operations - add logging for debugging
+  // Special handling for Auth.js operations - auto-fix RETURNING clauses
   const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
   const hasReturning = sql.toUpperCase().includes('RETURNING');
+  let modifiedSql = sql;
   
-  // Auth.js needs RETURNING clauses for proper operation
+  // Auto-add RETURNING clause for Auth.js operations if client hasn't already added it
   if (isInsert && !hasReturning && 
      (sql.includes('user') || sql.includes('account') || sql.includes('session'))) {
-    request.log.warn('Auth.js operation detected without RETURNING clause - this may cause constraint violations');
+    request.log.info('Auth.js operation detected without RETURNING clause - auto-adding RETURNING *');
+    modifiedSql = `${sql.trim()} RETURNING *`;
   }
 
   try {
-    const result = await pool.query(sql, params);
+    // Use the modified SQL with RETURNING * if applicable
+    const result = await pool.query(modifiedSql, params);
     
     // Log results for debugging
-    request.log.debug({ rowCount: result.rowCount }, 'Query completed');
+    request.log.debug({ 
+      rowCount: result.rowCount,
+      returnedFirstRow: result.rows[0] ? true : false,
+      operation: isInsert ? 'INSERT' : 'query'
+    }, 'Query completed');
 
     // Return the appropriate result based on the method
     if (method === 'single') {
@@ -184,7 +191,7 @@ app.post('/query', async (request, reply) => {
     }
     return result.rows;
   } catch (error) {
-    request.log.error({ error }, 'Database query error');
+    request.log.error({ error, sql: modifiedSql }, 'Database query error');
     return reply.code(500).send({ error: error.message });
   }
 });
@@ -227,14 +234,30 @@ app.post('/transaction', async (request, reply) => {
       const isAccountInsert = isInsert && sql.includes('account');
       const hasReturning = sql.toUpperCase().includes('RETURNING');
       
+      // Auto-add RETURNING for Auth.js operations
+      let modifiedSql = sql;
+      
       // Auth.js typically creates a user first, then links accounts
       if (isUserInsert) {
         request.log.info('User creation detected in transaction');
         authJsOperationDetected = true;
+        
+        // Add RETURNING if needed for user creation
+        if (!hasReturning) {
+          request.log.info('Auto-adding RETURNING to user creation query');
+          modifiedSql = `${sql.trim()} RETURNING *`;
+        }
       }
       
       if (isAccountInsert) {
         request.log.info('Account creation detected in transaction');
+        
+        // Add RETURNING if needed for account creation
+        if (!hasReturning) {
+          request.log.info('Auto-adding RETURNING to account creation query');
+          modifiedSql = `${sql.trim()} RETURNING *`;
+        }
+        
         if (createdUserIds.length > 0) {
           request.log.debug({ userIds: createdUserIds }, 'User IDs available for linking');
         } else {
@@ -242,8 +265,8 @@ app.post('/transaction', async (request, reply) => {
         }
       }
       
-      // Execute the query
-      const result = await client.query(sql, params);
+      // Execute the query with the potentially modified SQL
+      const result = await client.query(modifiedSql, params);
       
       // Handle different result methods
       if (method === 'single') {
@@ -253,7 +276,8 @@ app.post('/transaction', async (request, reply) => {
       }
       
       // Store user IDs from RETURNING clauses for Auth.js debugging
-      if (isUserInsert && hasReturning && result.rows.length > 0) {
+      // This includes both original RETURNING clauses and our auto-added ones
+      if (isUserInsert && result.rows.length > 0) {
         const userIds = result.rows.map(row => row.id).filter(Boolean);
         createdUserIds = [...createdUserIds, ...userIds];
         request.log.debug({ newUserIds: userIds }, 'User IDs from RETURNING clause');
