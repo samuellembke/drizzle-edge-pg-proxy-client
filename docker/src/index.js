@@ -225,8 +225,40 @@ app.post('/query', async (request, reply) => {
     return reply.code(400).send({ error: 'Invalid method. Use "all" or "single".' });
   }
   
-  // Log query for debugging
-  request.log.debug({ sql, params }, 'Executing query');
+  // Enhanced detailed logging for query understanding
+  if (sql.includes('default')) {
+    app.log.info({ 
+      sql, 
+      params,
+      hasDefault: true,
+      lowercaseSql: sql.toLowerCase(), 
+      sqlType: sql.trim().split(' ')[0].toUpperCase(),
+      headers: request.headers
+    }, 'Executing query with DEFAULT keyword');
+    
+    // Check table structure for columns with default values
+    try {
+      // Get the table name from the SQL
+      const tableNameMatch = sql.match(/into\s+"([^"]+)"/i);
+      if (tableNameMatch && tableNameMatch[1]) {
+        const tableName = tableNameMatch[1];
+        // Query column defaults
+        const tableInfoQuery = `
+          SELECT column_name, column_default, is_nullable 
+          FROM information_schema.columns 
+          WHERE table_name = $1
+          ORDER BY ordinal_position
+        `;
+        const columnInfo = await pool.query(tableInfoQuery, [tableName]);
+        app.log.info({ 
+          tableName, 
+          columns: columnInfo.rows 
+        }, 'Table structure info');
+      }
+    } catch (infoError) {
+      app.log.warn({ error: infoError }, 'Error fetching table structure');
+    }
+  }
 
   try {
     // Execute the query
@@ -252,10 +284,17 @@ app.post('/query', async (request, reply) => {
       return result.rows;
     }
   } catch (error) {
-    request.log.error({ 
+    // Enhanced error logging with detailed information
+    app.log.error({ 
       error, 
       sql, 
-      params 
+      params,
+      errorCode: error.code,
+      errorTable: error.table,
+      errorConstraint: error.constraint,
+      errorDetail: error.detail,
+      errorRoutine: error.routine,
+      errorHint: error.hint
     }, 'Database query error');
     
     // Format PostgreSQL error like Neon does
@@ -278,8 +317,27 @@ app.post('/transaction', async (request, reply) => {
     return reply.code(400).send({ error: 'An array of queries is required' });
   }
   
-  // Log transaction details
-  request.log.debug({ queryCount: queries.length }, 'Starting transaction');
+  // Enhanced transaction logging
+  app.log.info({ 
+    queryCount: queries.length,
+    isolationLevel,
+    readOnly,
+    deferrable,
+    headers: request.headers,
+    queriesWithDefault: queries.filter(q => q.sql?.includes('default')).length
+  }, 'Starting transaction');
+
+  // Log queries containing DEFAULT for deeper analysis
+  queries.forEach((query, index) => {
+    if (query.sql?.includes('default')) {
+      app.log.info({
+        index,
+        sql: query.sql,
+        params: query.params,
+        method: query.method
+      }, 'Transaction query with DEFAULT keyword');
+    }
+  });
 
   // Get a client from the pool
   const client = await pool.connect();
@@ -304,6 +362,7 @@ app.post('/transaction', async (request, reply) => {
       beginQuery += ' NOT DEFERRABLE';
     }
     
+    app.log.info({ beginQuery }, 'Starting transaction with isolation level');
     await client.query(beginQuery);
 
     // Execute all queries
@@ -313,24 +372,80 @@ app.post('/transaction', async (request, reply) => {
       const query = queries[i];
       const { sql, params = [], method = 'all' } = query;
       
-      // Log each query in the transaction
-      request.log.debug({ index: i, sql, params }, 'Transaction query');
-      
-      // Execute the query
-      const result = await client.query(sql, params);
-      
-      // Format the result
-      if (rawTextOutput) {
-        const formattedResult = formatQueryResult(result, rawTextOutput);
-        formattedResult.rowAsArray = arrayMode;
-        results.push(formattedResult);
-      } else {
-        // Store results according to the specified method
-        if (method === 'single') {
-          results.push(result.rows[0] || null);
-        } else {
-          results.push(result.rows);
+      // Check for DEFAULT keywords and log relevant table structure
+      if (sql?.includes('default')) {
+        // Extract table name from INSERT statements
+        const tableNameMatch = sql.match(/into\s+"([^"]+)"/i);
+        if (tableNameMatch && tableNameMatch[1]) {
+          const tableName = tableNameMatch[1];
+          try {
+            // Query column defaults
+            const tableInfoQuery = `
+              SELECT column_name, column_default, is_nullable 
+              FROM information_schema.columns 
+              WHERE table_name = $1
+              ORDER BY ordinal_position
+            `;
+            const columnInfo = await client.query(tableInfoQuery, [tableName]);
+            app.log.info({ 
+              query: i,
+              tableName, 
+              columns: columnInfo.rows 
+            }, 'Table structure info for transaction query');
+          } catch (infoError) {
+            app.log.warn({ error: infoError }, 'Error fetching table structure in transaction');
+          }
         }
+      }
+      
+      // Log each query in the transaction
+      app.log.info({ 
+        index: i, 
+        sql, 
+        params, 
+        method,
+        containsDefault: sql?.includes('default')
+      }, 'Executing transaction query');
+      
+      try {
+        // Execute the query
+        const result = await client.query(sql, params);
+        
+        app.log.info({ 
+          index: i,
+          rowCount: result.rowCount,
+          hasRows: result.rows?.length > 0,
+          fieldCount: result.fields?.length,
+          commandStatus: result.command,
+          firstRowSample: result.rows?.[0] ? JSON.stringify(result.rows[0]).substring(0, 100) : null
+        }, 'Transaction query result');
+        
+        // Format the result
+        if (rawTextOutput) {
+          const formattedResult = formatQueryResult(result, rawTextOutput);
+          formattedResult.rowAsArray = arrayMode;
+          results.push(formattedResult);
+        } else {
+          // Store results according to the specified method
+          if (method === 'single') {
+            results.push(result.rows[0] || null);
+          } else {
+            results.push(result.rows);
+          }
+        }
+      } catch (queryError) {
+        // Log detailed query error but let the transaction handler catch and rollback
+        app.log.error({ 
+          index: i,
+          error: queryError,
+          errorCode: queryError.code,
+          errorDetail: queryError.detail,
+          sql, 
+          params
+        }, 'Transaction query failed');
+        
+        // Propagate the error to trigger rollback
+        throw queryError;
       }
     }
 
@@ -338,9 +453,10 @@ app.post('/transaction', async (request, reply) => {
     await client.query('COMMIT');
     
     // Log transaction summary
-    request.log.debug({ 
+    app.log.info({ 
       success: true, 
-      queries: queries.length
+      queryCount: queries.length,
+      resultCount: results.length
     }, 'Transaction completed successfully');
 
     // Return formatted response matching Neon's format
@@ -349,11 +465,23 @@ app.post('/transaction', async (request, reply) => {
     // Rollback in case of error
     try {
       await client.query('ROLLBACK');
+      app.log.info('Transaction rolled back due to error');
     } catch (rollbackError) {
-      request.log.error({ error: rollbackError }, 'Error during transaction rollback');
+      app.log.error({ error: rollbackError }, 'Error during transaction rollback');
     }
     
-    request.log.error({ error }, 'Transaction failed');
+    // Detailed error logging
+    app.log.error({ 
+      error,
+      errorCode: error.code,
+      errorTable: error.table,
+      errorConstraint: error.constraint,
+      errorDetail: error.detail,
+      errorRoutine: error.routine,
+      errorHint: error.hint,
+      messageStr: error.message
+    }, 'Transaction failed');
+    
     return reply.code(400).send(formatPostgresError(error));
   } finally {
     // Release the client back to the pool
