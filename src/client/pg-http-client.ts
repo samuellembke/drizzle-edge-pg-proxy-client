@@ -386,8 +386,11 @@ export function createPgHttpClient({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Neon-Raw-Text-Output': 'true', // Use Neon's format for raw text output
+        // Add Neon-specific headers for compatibility
+        'Neon-Raw-Text-Output': 'true', 
         'Neon-Array-Mode': String(arrayMode),
+        // IMPORTANT: Always include Authorization header first if authToken is provided
+        // to ensure compatibility with all server implementations
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify({
@@ -542,8 +545,11 @@ export function createPgHttpClient({
       // Prepare headers with transaction options
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
+        // Add Neon-specific headers for compatibility
         'Neon-Raw-Text-Output': 'true',
         'Neon-Array-Mode': String(txnArrayMode),
+        // IMPORTANT: Always include Authorization header first if authToken is provided
+        // to ensure compatibility with all server implementations
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
       };
       
@@ -654,6 +660,8 @@ export function createPgHttpClient({
       'Content-Type': 'application/json',
       'Neon-Raw-Text-Output': 'true',
       'Neon-Array-Mode': String(queryArrayMode),
+      // IMPORTANT: Always include Authorization header if authToken is provided
+      ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
     };
     
     const fetchOptions: RequestInit = {
