@@ -399,6 +399,29 @@ bun run lint
 
 MIT
 
+## 📋 Changelog
+
+### Version 0.2.0 (Latest)
+
+This version provides significant improvements to match Neon's client interface:
+
+- ✅ **Enhanced Error Handling**: Added proper PostgreSQL error class with all standard Postgres error fields
+- ✅ **Improved SQL Processing**: Better handling of parameter binding and type detection
+- ✅ **Better Transaction Support**: Added support for transaction isolation levels, read-only and deferrable transactions
+- ✅ **Binary Data Handling**: Improved handling of binary data with proper bytea conversion
+- ✅ **Format Compatibility**: Response format now exactly matches Neon's for better compatibility with Auth.js
+
+### Version 0.1.9
+
+- Fixed compatibility issues with Auth.js by ensuring the query method is properly exposed and bound
+- Fixed parameter binding in SQL templating to match Neon's interface
+
+### Version 0.1.3
+
+- Enhanced Auth.js support with better transaction handling
+- Improved error detection for null constraint violations
+- Added detailed debugging for Auth.js operations
+
 ## 🔧 Troubleshooting
 
 ### Error: ERR_SSL_WRONG_VERSION_NUMBER

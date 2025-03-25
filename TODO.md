@@ -4,28 +4,28 @@ This document outlines the improvements needed to bring our `drizzle-edge-pg-pro
 
 ## Error Handling Enhancements
 
-- [ ] Create a proper `PgError` class that extends `Error` with PostgreSQL-specific fields:
-  - [ ] Add severity levels (ERROR, FATAL, PANIC, etc.)
-  - [ ] Add error codes (based on PostgreSQL SQLSTATE codes)
-  - [ ] Add detail, hint, position fields
-  - [ ] Add schema, table, column references
-  - [ ] Add file, line, routine for debugging
-- [ ] Implement proper error deserialization from HTTP responses
+- [x] Create a proper `PgError` class that extends `Error` with PostgreSQL-specific fields:
+  - [x] Add severity levels (ERROR, FATAL, PANIC, etc.)
+  - [x] Add error codes (based on PostgreSQL SQLSTATE codes)
+  - [x] Add detail, hint, position fields
+  - [x] Add schema, table, column references
+  - [x] Add file, line, routine for debugging
+- [x] Implement proper error deserialization from HTTP responses
 - [ ] Add specific error types for different categories (connection, query, transaction)
-- [ ] Improve error messages with contextual information
+- [x] Improve error messages with contextual information
 
 ## SQL Query Processing
 
-- [ ] Enhance parameter binding with full PostgreSQL type awareness
-- [ ] Improve SQL template composition with proper recursive handling
-- [ ] Implement better value serialization for complex types (arrays, JSON, etc.)
+- [x] Enhance parameter binding with full PostgreSQL type awareness
+- [x] Improve SQL template composition with proper recursive handling
+- [x] Implement better value serialization for complex types (arrays, JSON, etc.)
 - [ ] Add validation for SQL statements
 - [ ] Support named parameters in addition to positional parameters
-- [ ] Handle binary data encoding properly (bytea format)
+- [x] Handle binary data encoding properly (bytea format)
 
 ## Type System Integration
 
-- [ ] Implement proper type mapping between PostgreSQL and JavaScript types
+- [x] Implement proper type mapping between PostgreSQL and JavaScript types
 - [ ] Add support for custom type parsers
 - [ ] Handle array types properly
 - [ ] Add proper timestamp/date handling with timezone awareness
@@ -42,13 +42,13 @@ This document outlines the improvements needed to bring our `drizzle-edge-pg-pro
 
 ## Transaction Management
 
-- [ ] Add support for different isolation levels:
-  - [ ] READ UNCOMMITTED
-  - [ ] READ COMMITTED
-  - [ ] REPEATABLE READ
-  - [ ] SERIALIZABLE
-- [ ] Implement read-only transaction support
-- [ ] Add deferrable transaction support
+- [x] Add support for different isolation levels:
+  - [x] READ UNCOMMITTED
+  - [x] READ COMMITTED
+  - [x] REPEATABLE READ
+  - [x] SERIALIZABLE
+- [x] Implement read-only transaction support
+- [x] Add deferrable transaction support
 - [ ] Support for savepoints within transactions
 - [ ] Better handling of transaction failures and retries
 

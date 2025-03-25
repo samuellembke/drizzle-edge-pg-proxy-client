@@ -99,7 +99,7 @@ app.addHook('preHandler', async (request, reply) => {
 app.addHook('onRequest', async (request, reply) => {
   reply.header('Access-Control-Allow-Origin', '*');
   reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Neon-Connection-String, Neon-Raw-Text-Output, Neon-Array-Mode, Neon-Batch-Isolation-Level, Neon-Batch-Read-Only, Neon-Batch-Deferrable');
   
   if (request.method === 'OPTIONS') {
     reply.code(204).send();
@@ -146,9 +146,75 @@ app.get('/health', async () => {
   }
 });
 
+// Helper function to format PostgreSQL errors like Neon does
+function formatPostgresError(error) {
+  if (!error) return { error: 'Unknown database error' };
+  
+  // Extract all PostgreSQL specific error fields
+  const errorResponse = {
+    message: error.message,
+    severity: error.severity,
+    code: error.code,
+    detail: error.detail,
+    hint: error.hint,
+    position: error.position,
+    internalPosition: error.internalPosition,
+    internalQuery: error.internalQuery,
+    where: error.where,
+    schema: error.schema,
+    table: error.table,
+    column: error.column,
+    dataType: error.dataType,
+    constraint: error.constraint,
+    file: error.file,
+    line: error.line,
+    routine: error.routine
+  };
+  
+  // Remove undefined fields to make the response cleaner
+  for (const key in errorResponse) {
+    if (errorResponse[key] === undefined) {
+      delete errorResponse[key];
+    }
+  }
+  
+  return errorResponse;
+}
+
+// Format query results to match Neon's response format
+function formatQueryResult(result, rawTextOutput = false) {
+  if (!result) return null;
+  
+  const fields = result.fields.map(field => ({
+    name: field.name,
+    dataTypeID: field.dataTypeID,
+    tableID: field.tableID,
+    columnID: field.columnID,
+    dataTypeSize: field.dataTypeSize,
+    dataTypeModifier: field.dataTypeModifier,
+    format: field.format
+  }));
+  
+  // Extract command type
+  let command = 'SELECT';
+  if (result.command) {
+    command = result.command;
+  }
+  
+  return {
+    command,
+    rowCount: result.rowCount,
+    fields,
+    rows: result.rows,
+    rowAsArray: false // Default to object mode
+  };
+}
+
 // Query endpoint
 app.post('/query', async (request, reply) => {
   const { sql, params = [], method = 'all' } = request.body;
+  const rawTextOutput = request.headers['neon-raw-text-output'] === 'true';
+  const arrayMode = request.headers['neon-array-mode'] === 'true';
 
   if (!sql) {
     return reply.code(400).send({ error: 'SQL query is required' });
@@ -172,11 +238,19 @@ app.post('/query', async (request, reply) => {
       hasRows: result.rows.length > 0,
     }, 'Query completed successfully');
 
-    // Return the appropriate result based on the method
-    if (method === 'single') {
-      return result.rows[0] || null;
+    // Return the appropriate result based on the method and format
+    if (rawTextOutput) {
+      // Return formatted result like Neon does
+      const formattedResult = formatQueryResult(result, rawTextOutput);
+      formattedResult.rowAsArray = arrayMode; // Set the array mode based on header
+      return formattedResult;
+    } else {
+      // Return simpler format for compatibility with existing clients
+      if (method === 'single') {
+        return result.rows[0] || null;
+      }
+      return result.rows;
     }
-    return result.rows;
   } catch (error) {
     request.log.error({ 
       error, 
@@ -184,13 +258,21 @@ app.post('/query', async (request, reply) => {
       params 
     }, 'Database query error');
     
-    return reply.code(500).send({ error: error.message });
+    // Format PostgreSQL error like Neon does
+    return reply.code(400).send(formatPostgresError(error));
   }
 });
 
 // Transaction endpoint
 app.post('/transaction', async (request, reply) => {
   const { queries } = request.body;
+  const rawTextOutput = request.headers['neon-raw-text-output'] === 'true';
+  const arrayMode = request.headers['neon-array-mode'] === 'true';
+  
+  // Get transaction isolation level from headers
+  const isolationLevel = request.headers['neon-batch-isolation-level'];
+  const readOnly = request.headers['neon-batch-read-only'] === 'true';
+  const deferrable = request.headers['neon-batch-deferrable'] === 'true';
 
   if (!queries || !Array.isArray(queries)) {
     return reply.code(400).send({ error: 'An array of queries is required' });
@@ -203,8 +285,26 @@ app.post('/transaction', async (request, reply) => {
   const client = await pool.connect();
 
   try {
-    // Start a transaction
-    await client.query('BEGIN');
+    // Start a transaction with proper isolation level if specified
+    let beginQuery = 'BEGIN';
+    
+    if (isolationLevel) {
+      beginQuery += ` ISOLATION LEVEL ${isolationLevel.replace(/([A-Z])/g, ' $1').trim().toUpperCase()}`;
+    }
+    
+    if (readOnly) {
+      beginQuery += ' READ ONLY';
+    } else {
+      beginQuery += ' READ WRITE';
+    }
+    
+    if (deferrable && readOnly && isolationLevel === 'Serializable') {
+      beginQuery += ' DEFERRABLE';
+    } else if (isolationLevel === 'Serializable') {
+      beginQuery += ' NOT DEFERRABLE';
+    }
+    
+    await client.query(beginQuery);
 
     // Execute all queries
     const results = [];
@@ -219,11 +319,18 @@ app.post('/transaction', async (request, reply) => {
       // Execute the query
       const result = await client.query(sql, params);
       
-      // Store results according to the specified method
-      if (method === 'single') {
-        results.push(result.rows[0] || null);
+      // Format the result
+      if (rawTextOutput) {
+        const formattedResult = formatQueryResult(result, rawTextOutput);
+        formattedResult.rowAsArray = arrayMode;
+        results.push(formattedResult);
       } else {
-        results.push(result.rows);
+        // Store results according to the specified method
+        if (method === 'single') {
+          results.push(result.rows[0] || null);
+        } else {
+          results.push(result.rows);
+        }
       }
     }
 
@@ -236,7 +343,8 @@ app.post('/transaction', async (request, reply) => {
       queries: queries.length
     }, 'Transaction completed successfully');
 
-    return results;
+    // Return formatted response matching Neon's format
+    return { results };
   } catch (error) {
     // Rollback in case of error
     try {
@@ -246,7 +354,7 @@ app.post('/transaction', async (request, reply) => {
     }
     
     request.log.error({ error }, 'Transaction failed');
-    return reply.code(500).send({ error: error.message });
+    return reply.code(400).send(formatPostgresError(error));
   } finally {
     // Release the client back to the pool
     client.release();

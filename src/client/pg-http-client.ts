@@ -18,6 +18,60 @@ export interface ParameterizedQuery {
   params: any[];
 }
 
+// Custom PostgreSQL Error Class following Neon's pattern
+export class PgError extends Error {
+  override name = 'PgError' as const;
+
+  // PostgreSQL specific error fields
+  severity?: string;
+  code?: string;
+  detail?: string;
+  hint?: string;
+  position?: string;
+  internalPosition?: string;
+  internalQuery?: string;
+  where?: string;
+  schema?: string;
+  table?: string;
+  column?: string;
+  dataType?: string;
+  constraint?: string;
+  file?: string;
+  line?: string;
+  routine?: string;
+
+  // Original error if wrapped
+  sourceError?: Error;
+
+  constructor(message: string) {
+    super(message);
+
+    if ('captureStackTrace' in Error && typeof Error.captureStackTrace === 'function') {
+      Error.captureStackTrace(this, PgError);
+    }
+  }
+}
+
+// Standard PostgreSQL error fields for parsing from server responses
+const PG_ERROR_FIELDS = [
+  'severity',
+  'code',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'file',
+  'line',
+  'routine',
+] as const;
+
 // Class for RAW SQL representation
 export class UnsafeRawSql {
   constructor(public sql: string) {}
@@ -56,7 +110,6 @@ export class QueryPromise<T = any> implements Promise<T> {
   }
   
   // For compatibility with result iteration, implement Symbol.iterator
-  // This is a simplified version that just returns the Promise result
   [Symbol.iterator](): Iterator<T> {
     // Create a reference to the promise outside the iterator
     const promise = this;
@@ -86,6 +139,34 @@ export class QueryPromise<T = any> implements Promise<T> {
   }
 }
 
+// Helper function to handle PostgreSQL error parsing
+function parsePostgresError(err: any): PgError {
+  const pgError = new PgError(err.message || 'Unknown PostgreSQL error');
+  
+  // Copy all PostgreSQL error fields if they exist
+  for (const field of PG_ERROR_FIELDS) {
+    if (err[field] !== undefined) {
+      pgError[field] = err[field];
+    }
+  }
+  
+  // Store original error if available
+  if (err instanceof Error) {
+    pgError.sourceError = err;
+  }
+  
+  return pgError;
+}
+
+// Helper function to encode binary data for PostgreSQL
+function encodeBuffersAsBytea(value: unknown): unknown {
+  // Convert Buffer to bytea hex format: https://www.postgresql.org/docs/current/datatype-binary.html
+  if (value instanceof Buffer || (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value))) {
+    return '\\x' + Buffer.from(value as any).toString('hex');
+  }
+  return value;
+}
+
 export function createPgHttpClient({
   proxyUrl,
   authToken,
@@ -103,7 +184,7 @@ export function createPgHttpClient({
   
   // Check if fetch is available in the current environment
   if (!fetchFn) {
-    throw new Error('fetch is not available in the current environment. Please provide a fetch implementation.');
+    throw new PgError('fetch is not available in the current environment. Please provide a fetch implementation.');
   }
 
   // Direct query execution function - the core of the client
@@ -116,7 +197,7 @@ export function createPgHttpClient({
       },
       body: JSON.stringify({
         sql: query,
-        params,
+        params: params.map(param => encodeBuffersAsBytea(param)),
         method: 'all',
       }),
     };
@@ -125,27 +206,40 @@ export function createPgHttpClient({
       const response = await fetchFn(`${formattedProxyUrl}/query`, fetchOptions);
 
       if (!response.ok) {
-        let errorMessage = '';
+        let errorData: any = { error: response.statusText };
         
         try {
-          const errorData = await response.json() as { error?: string };
-          errorMessage = errorData.error || response.statusText;
-        } catch {
-          errorMessage = `Status ${response.status}: ${response.statusText}`;
+          errorData = await response.json();
+        } catch (parseError) {
+          // If we can't parse JSON, use the status text
+          errorData = { 
+            error: `Status ${response.status}: ${response.statusText}` 
+          };
         }
         
-        throw new Error(`PostgreSQL HTTP proxy error: ${errorMessage}`);
+        // Create a proper PostgreSQL error
+        const pgError = new PgError(errorData.error || errorData.message || `PostgreSQL HTTP proxy error: ${response.statusText}`);
+        
+        // Copy all PostgreSQL error fields if they exist
+        for (const field of PG_ERROR_FIELDS) {
+          if (errorData[field] !== undefined) {
+            pgError[field] = errorData[field];
+          }
+        }
+        
+        throw pgError;
       }
 
       // Parse the rows from the response
       const result = await response.json() as any;
       const rows = Array.isArray(result) ? result : (result?.rows || []);
       
-      // Determine command type from the query
+      // Determine command type from the query for proper result formatting
       let command = 'SELECT';
-      if (query.trim().toUpperCase().startsWith('INSERT')) command = 'INSERT';
-      else if (query.trim().toUpperCase().startsWith('UPDATE')) command = 'UPDATE';
-      else if (query.trim().toUpperCase().startsWith('DELETE')) command = 'DELETE';
+      const upperQuery = query.trim().toUpperCase();
+      if (upperQuery.startsWith('INSERT')) command = 'INSERT';
+      else if (upperQuery.startsWith('UPDATE')) command = 'UPDATE';
+      else if (upperQuery.startsWith('DELETE')) command = 'DELETE';
       
       // Match Neon's result format, which is what drizzle-orm/neon-http expects
       return {
@@ -156,8 +250,14 @@ export function createPgHttpClient({
         rowAsArray: result?.rowAsArray || false
       };
     } catch (error) {
-      console.error('Error connecting to PostgreSQL HTTP proxy:', error);
-      throw new Error(`Failed to connect to PostgreSQL HTTP proxy at ${formattedProxyUrl}: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof PgError) {
+        throw error; // Already formatted as a PgError
+      }
+      
+      // Create a connection error
+      const connError = new PgError(`Failed to connect to PostgreSQL HTTP proxy at ${formattedProxyUrl}: ${error instanceof Error ? error.message : String(error)}`);
+      connError.sourceError = error instanceof Error ? error : undefined;
+      throw connError;
     }
   };
 
@@ -185,11 +285,15 @@ export function createPgHttpClient({
             // Inline the query text but not params
             query += value.queryData.query;
           } else {
-            throw new Error('This query is not composable');
+            throw new PgError('This query is not composable');
           }
         } else {
           params.push(value);
           query += `$${params.length}`;
+          
+          // Type hint for binary data
+          const isBinary = value instanceof Buffer || (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value));
+          if (isBinary) query += '::bytea';
         }
       }
     }
@@ -203,37 +307,70 @@ export function createPgHttpClient({
     return new QueryPromise(execute, parameterizedQuery);
   };
 
-  // Transaction handling
-  const transaction = async (queries: { text: string, values: unknown[] }[]): Promise<PgQueryResult[]> => {
+  // Transaction handling with improved options support
+  const transaction = async (
+    queries: { text: string, values: unknown[] }[],
+    options?: {
+      isolationLevel?: 'ReadUncommitted' | 'ReadCommitted' | 'RepeatableRead' | 'Serializable';
+      readOnly?: boolean;
+      deferrable?: boolean;
+    }
+  ): Promise<PgQueryResult[]> => {
     try {
       // Format queries for the transaction
       const formattedQueries = queries.map(q => ({
         sql: q.text,
-        params: q.values,
+        params: q.values.map(value => encodeBuffersAsBytea(value)),
         method: 'all',
       }));
+
+      // Prepare headers with transaction options
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+      };
+      
+      // Add transaction options if provided
+      if (options?.isolationLevel) {
+        headers['Neon-Batch-Isolation-Level'] = options.isolationLevel;
+      }
+      
+      if (options?.readOnly !== undefined) {
+        headers['Neon-Batch-Read-Only'] = String(options.readOnly);
+      }
+      
+      if (options?.deferrable !== undefined) {
+        headers['Neon-Batch-Deferrable'] = String(options.deferrable);
+      }
 
       // Send the transaction request
       const response = await fetchFn(`${formattedProxyUrl}/transaction`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
-        },
+        headers,
         body: JSON.stringify({
           queries: formattedQueries
         }),
       });
 
       if (!response.ok) {
-        let errorMessage = '';
+        let errorData: any = {};
         try {
-          const errorData = await response.json() as { error?: string };
-          errorMessage = errorData.error || response.statusText;
+          errorData = await response.json();
         } catch {
-          errorMessage = `Status ${response.status}: ${response.statusText}`;
+          errorData = { error: `Status ${response.status}: ${response.statusText}` };
         }
-        throw new Error(`PostgreSQL HTTP transaction error: ${errorMessage}`);
+        
+        // Create a proper PostgreSQL error
+        const pgError = new PgError(errorData.error || errorData.message || `PostgreSQL HTTP transaction error: ${response.statusText}`);
+        
+        // Copy all PostgreSQL error fields if they exist
+        for (const field of PG_ERROR_FIELDS) {
+          if (errorData[field] !== undefined) {
+            pgError[field] = errorData[field];
+          }
+        }
+        
+        throw pgError;
       }
 
       // Parse results from response
@@ -242,7 +379,7 @@ export function createPgHttpClient({
         const json = await response.json() as any;
         results = json.results || json;
       } catch (error) {
-        throw new Error(`Error parsing transaction response: ${error}`);
+        throw new PgError(`Error parsing transaction response: ${error}`);
       }
       
       // Format each result to match what Neon returns
@@ -266,8 +403,14 @@ export function createPgHttpClient({
       
       return formattedResults;
     } catch (error) {
-      console.error('Error executing transaction on PostgreSQL HTTP proxy:', error);
-      throw new Error(`Failed to execute transaction on PostgreSQL HTTP proxy at ${formattedProxyUrl}: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof PgError) {
+        throw error; // Already formatted as a PgError
+      }
+      
+      // Create a transaction error
+      const txError = new PgError(`Failed to execute transaction on PostgreSQL HTTP proxy at ${formattedProxyUrl}: ${error instanceof Error ? error.message : String(error)}`);
+      txError.sourceError = error instanceof Error ? error : undefined;
+      throw txError;
     }
   };
 
