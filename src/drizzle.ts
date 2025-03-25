@@ -1,6 +1,6 @@
 import { drizzle as drizzleOrm } from 'drizzle-orm/neon-http';
 import { createPgHttpClient } from './client/pg-http-client';
-import type { NeonQueryFunction } from '@neondatabase/serverless';
+import type { FullQueryResults, NeonQueryFunction } from '@neondatabase/serverless';
 
 /**
  * Creates a Drizzle client connecting to PostgreSQL via HTTP proxy
@@ -17,42 +17,50 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
   const { proxyUrl, authToken, schema, fetch } = options;
   const client = createPgHttpClient({ proxyUrl, authToken, fetch });
 
-  // Create a Neon-compatible client interface that returns data in the expected format
-  const neonCompatClient = async (sql: string, params: any[] = [], options: any = {}) => {
-    const result = await client.execute(sql, params);
-    return result;
+  // Create a compatible client for drizzle-orm
+  const compatClient = {
+    // Main query function
+    query: async (sql: string, params: any[] = [], options: any = {}) => {
+      try {
+        const result = await client.execute(sql, params);
+        return {
+          ...result,
+          // Ensure all required properties exist
+          command: sql.trim().toUpperCase().startsWith('INSERT') ? 'INSERT' : 'SELECT',
+          fields: result.fields || [],
+          rowCount: result.rowCount,
+          rows: result.rows || []
+        };
+      } catch (error) {
+        console.error('Query error:', sql, params);
+        throw error;
+      }
+    },
+
+    // SQL tag function
+    sql: client.sql,
+    
+    // For compatibility
+    execute: client.execute,
+    
+    // Unsafe query builder
+    unsafe: (sql: string) => ({ sql }),
+    
+    // Transaction support
+    transaction: client.transaction
   };
 
-  // Add all required methods to match the NeonQueryFunction interface
-  neonCompatClient.sql = client.sql;
+  // Create the drizzle-orm instance
+  const db = drizzleOrm(compatClient as any, { schema });
   
-  // Add query method for compatibility
-  neonCompatClient.query = async (sql: string, params: any[] = [], options: any = {}) => {
-    // Check if this is attempting an operation that requires RETURNING ID
-    // This is critical for Auth.js adapter operations (like user creation and account linking)
-    const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
-    const hasReturning = sql.toUpperCase().includes('RETURNING');
-    
-    // If we detect an insert that might need the returning ID (like Auth.js operations)
-    // but doesn't have RETURNING clause, consider adding it for debugging
-    if (isInsert && !hasReturning) {
-      console.log('Warning: INSERT query without RETURNING clause detected. Auth.js operations may require RETURNING ID.');
-    }
-    
-    const result = await client.execute(sql, params);
-    return {
-      ...result,
-      // Ensure fields property exists for Neon's mapResult function
-      fields: result.fields || []
-    };
-  };
-  
-  // Add transaction method for Auth.js operations
-  neonCompatClient.transaction = client.transaction;
-  
-  // Add unsafe method required by NeonQueryFunction
-  neonCompatClient.unsafe = (rawSql: string) => ({ sql: rawSql });
+  // Add direct query execution method used by Auth.js DrizzleAdapter
+  // This is a critical compatibility layer for Auth.js
+  Object.defineProperty(db, 'query', {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value: compatClient.query
+  });
 
-  // Use drizzle-orm with our HTTP client
-  return drizzleOrm(neonCompatClient as unknown as NeonQueryFunction<any, any>, { schema });
+  return db;
 }

@@ -35,12 +35,32 @@ export function createPgHttpClient({
 
   // Direct query execution function
   const execute = async (query: string, params: unknown[] = []): Promise<PgQueryResult> => {
+    // For debugging Auth.js issues
+    if (query.includes('account') || query.includes('user') || query.includes('session')) {
+      console.log('Auth.js query detected:', query);
+      console.log('Params:', params);
+    }
+    
     // Auto-add RETURNING for Auth.js operations that need it
     let modifiedQuery = query;
     
     // Check if this is an INSERT into account or session with user_id but no RETURNING
     const isInsert = query.trim().toUpperCase().startsWith('INSERT');
     const hasReturning = query.toUpperCase().includes('RETURNING');
+    
+    // Special handling for Auth.js account inserts
+    if (isInsert && query.includes('account') && query.includes('user_id')) {
+      console.log('Auth.js account insert detected');
+      
+      // If DEFAULT is used for user_id, this will cause the error
+      if (query.includes('default') && params.length > 0) {
+        console.log('WARNING: Auth.js is trying to insert account with DEFAULT for user_id');
+        
+        // Best approach is to let the server handle this with its auto-RETURNING functionality
+        // But we can log it for debugging
+        console.log('This will likely cause a foreign key constraint violation');
+      }
+    }
     
     // Only auto-add RETURNING to INSERT statements that don't already have it
     // and specifically for Auth.js operations
@@ -78,10 +98,24 @@ export function createPgHttpClient({
       } catch {
         errorMessage = `Status ${response.status}: ${response.statusText}`;
       }
+      
+      // For Auth.js-related errors, add more details
+      if (errorMessage.includes('user_id') && errorMessage.includes('null')) {
+        console.error('Auth.js foreign key violation detected!');
+        console.error('Query:', modifiedQuery);
+        console.error('Params:', params);
+        console.error('This is likely because Auth.js created a user record but the ID was not properly passed to the account creation query.');
+      }
+      
       throw new Error(`PostgreSQL HTTP proxy error: ${errorMessage}`);
     }
 
     const rows = await response.json() as any[];
+    
+    // For debugging Auth.js operations
+    if ((query.includes('user') || query.includes('account')) && rows.length > 0) {
+      console.log('Auth.js query result:', rows);
+    }
     
     // Format result to match what drizzle-orm/neon-http expects
     return {
