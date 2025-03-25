@@ -1,6 +1,6 @@
-// Using a more portable import approach since drizzle-orm/neon-http might not be directly available
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { drizzle as drizzleOrm } from 'drizzle-orm/neon-http';
 import { createPgHttpClient } from './client/pg-http-client';
+import type { NeonQueryFunction } from '@neondatabase/serverless';
 
 /**
  * Creates a Drizzle client connecting to PostgreSQL via HTTP proxy
@@ -13,22 +13,32 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
   authToken?: string;
   schema: TSchema;
   fetch?: typeof globalThis.fetch;
-}): PostgresJsDatabase<TSchema> {
-  const { proxyUrl: _proxyUrl, authToken: _authToken, schema, fetch: _fetch } = options;
-  // We create the client but don't use it directly in this stub implementation
-  // In a real implementation, we would use this client with drizzle-orm/neon-http
-  const _client = createPgHttpClient({ proxyUrl: _proxyUrl, authToken: _authToken, fetch: _fetch });
+}) {
+  const { proxyUrl, authToken, schema, fetch } = options;
+  const client = createPgHttpClient({ proxyUrl, authToken, fetch });
 
-  // Create a compatible client for the drizzle adapter
-  // This would be used in a real implementation with drizzle-orm/neon-http
-  // const httpClient = {
-  //   execute: _client.execute,
-  //   sql: _client.sql,
-  // };
+  // Create a Neon-compatible client interface that returns data in the expected format
+  const neonCompatClient = async (sql: string, params: any[] = [], options: any = {}) => {
+    const result = await client.execute(sql, params);
+    return result;
+  };
 
-  // Dynamically import drizzle-orm/neon-http to avoid direct dependency issues
-  // This is a workaround as we're using the type system to provide a strongly-typed interface
-  // while allowing runtime flexibility
-  // @ts-ignore - We're deliberately bypassing type checking here for compatibility
-  return { schema } as unknown as PostgresJsDatabase<TSchema>;
+  // Add all required methods to match the NeonQueryFunction interface
+  neonCompatClient.sql = client.sql;
+  
+  // Add query method for compatibility
+  neonCompatClient.query = async (sql: string, params: any[] = [], options: any = {}) => {
+    const result = await client.execute(sql, params);
+    return {
+      ...result,
+      // Ensure fields property exists for Neon's mapResult function
+      fields: result.fields || []
+    };
+  };
+  
+  // Add unsafe method required by NeonQueryFunction
+  neonCompatClient.unsafe = (rawSql: string) => ({ sql: rawSql });
+
+  // Use drizzle-orm with our HTTP client
+  return drizzleOrm(neonCompatClient as unknown as NeonQueryFunction<any, any>, { schema });
 }

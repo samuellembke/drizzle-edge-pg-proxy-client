@@ -1,10 +1,10 @@
 {
   "name": "drizzle-edge-pg-proxy-client",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Client for Drizzle PostgreSQL edge proxy in edge environments",
   "type": "module",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "author": "Samuel Lembke",
   "license": "MIT",
@@ -18,14 +18,13 @@
   },
   "exports": {
     ".": {
-      "source": "./src/index.ts",
       "import": {
         "types": "./dist/index.d.ts",
-        "default": "./dist/index.mjs"
+        "default": "./dist/index.js"
       },
       "require": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
       }
     },
     "./package.json": "./package.json"
@@ -62,8 +61,12 @@
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0",
+    "drizzle-orm": "^0.41.0"
+  },
   "peerDependencies": {
-    "drizzle-orm": "^0.32.0",
+    "drizzle-orm": "^0.41.0",
     "typescript": "^5.8.2"
   }
 }

@@ -22,6 +22,7 @@ A client library for connecting to PostgreSQL databases from edge environments (
 - [Quick Start](#-quick-start)
 - [Usage](#-usage)
   - [Basic Usage with Drizzle ORM](#basic-usage-with-drizzle-orm)
+  - [Using with Auth.js in Next.js](#using-with-authjs-in-nextjs)
   - [Raw SQL Queries](#raw-sql-queries)
   - [SQL Template Literals](#sql-template-literals)
   - [Transactions](#transactions)
@@ -33,6 +34,7 @@ A client library for connecting to PostgreSQL databases from edge environments (
 - [Examples](#-examples)
 - [Development](#-development)
 - [License](#-license)
+- [Troubleshooting](#-troubleshooting)
 
 ## 📥 Installation
 
@@ -95,7 +97,7 @@ import { eq } from 'drizzle-orm';
 import { users } from './schema';
 
 const db = drizzle({
-  proxyUrl: 'https://your-pg-proxy-url.com',
+  proxyUrl: 'http://localhost:7432', // Use http:// for local development
   authToken: 'your-secret-token', // Optional
   schema: { users },
 });
@@ -121,6 +123,50 @@ await db.update(users)
 // Delete a user
 await db.delete(users).where(eq(users.id, 1));
 ```
+
+### Using with Auth.js in Next.js
+
+This package can be used with Auth.js (formerly NextAuth.js) using the Drizzle adapter. Here's how to set it up:
+
+```typescript
+// src/server/db/index.ts
+import { drizzle } from 'drizzle-edge-pg-proxy-client';
+import * as schema from "./schema";
+
+// Make sure to use http:// for local development
+export const db = drizzle({
+  proxyUrl: process.env.DATABASE_PROXY_URL || 'http://localhost:7432',
+  authToken: process.env.DATABASE_PROXY_TOKEN,
+  schema
+});
+```
+
+Then in your Auth.js configuration:
+
+```typescript
+// src/server/auth/config.ts
+import { DrizzleAdapter } from "@auth/drizzle-adapter";
+import { db } from "../db";
+import { users, accounts, sessions, verificationTokens } from "../db/schema";
+
+export const authConfig = {
+  // Your other Auth.js config...
+  adapter: DrizzleAdapter(db, {
+    usersTable: users,
+    accountsTable: accounts,
+    sessionsTable: sessions,
+    verificationTokensTable: verificationTokens,
+  }),
+  // ...
+};
+```
+
+**Important Note for Next.js Edge Runtime or Middleware**:
+If you're using this in the Edge Runtime or middleware, be aware that you need to:
+
+1. Use the correct URL protocol (http:// vs https://) depending on your environment.
+2. Make sure your PostgreSQL proxy is accessible from the edge environment.
+3. In development, use http:// for localhost connections.
 
 ### Raw SQL Queries
 
@@ -350,3 +396,53 @@ bun run lint
 ## 📄 License
 
 MIT
+
+## 🔧 Troubleshooting
+
+### Error: ERR_SSL_WRONG_VERSION_NUMBER
+
+If you encounter an error like `ERR_SSL_WRONG_VERSION_NUMBER` when trying to connect to your PostgreSQL proxy, it usually indicates one of these issues:
+
+1. **Incorrect Protocol**: You're using `https://` when you should be using `http://` (or vice versa). In local development, use `http://`.
+
+   ```typescript
+   // Correct for local development
+   const db = drizzle({
+     proxyUrl: 'http://localhost:7432',
+     // ...
+   });
+   ```
+
+2. **Proxy Not Running**: Your PostgreSQL proxy server isn't running or isn't accessible at the specified URL.
+
+3. **Middleware/Edge Runtime Restrictions**: When using in Next.js middleware or Edge Runtime, there might be additional restrictions on network requests. Make sure your proxy is accessible from these environments.
+
+### Auth.js DrizzleAdapter Errors
+
+If you encounter errors with the Auth.js DrizzleAdapter like "Unsupported database type", make sure:
+
+1. You're using the correct version of `@auth/drizzle-adapter` that's compatible with your Auth.js version
+2. The adapter has correct table configurations
+3. The database client is correctly initialized before the adapter
+
+### Other Connection Issues
+
+1. **Check Proxy Logs**: Check the logs of your PostgreSQL HTTP proxy for any errors
+2. **Verify Environment Variables**: Make sure all required environment variables are set correctly
+3. **Network Access**: In production, ensure your Edge functions have network access to your proxy server
+4. **CORS Issues**: If you're getting CORS errors, make sure your proxy server has appropriate CORS headers configured
+
+For more detailed debugging, try:
+
+```typescript
+// Add this to see more details about connection issues
+console.error = (...args) => {
+  console.log('Error:', ...args);
+};
+
+// Then initialize your client
+const db = drizzle({
+  proxyUrl: 'http://localhost:7432',
+  // ...
+});
+```

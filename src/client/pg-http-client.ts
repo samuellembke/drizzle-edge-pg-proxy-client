@@ -16,9 +16,27 @@ export function createPgHttpClient({
   // Use provided fetch or global fetch
   const fetchFn = customFetch || globalThis.fetch;
 
+  // Format the proxy URL to ensure it's valid
+  const formattedProxyUrl = proxyUrl.endsWith('/') ? proxyUrl.slice(0, -1) : proxyUrl;
+  
+  // Check if fetch is available in the current environment
+  if (!fetchFn) {
+    throw new Error('fetch is not available in the current environment. Please provide a fetch implementation.');
+  }
+  
+  // Define the result type to match what drizzle-orm/neon-http expects
+  type PgQueryResult = {
+    command: string;
+    fields: any[];
+    rowCount: number;
+    rows: any[];
+    rowAsArray: boolean;
+  };
+
   // Direct query execution function
-  const execute = async (query: string, params: unknown[] = []): Promise<any[]> => {
-    const response = await fetchFn(`${proxyUrl}/query`, {
+  const execute = async (query: string, params: unknown[] = []): Promise<PgQueryResult> => {
+    // In middleware and edge runtimes, we need to be careful with fetch options
+    const fetchOptions: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -29,7 +47,10 @@ export function createPgHttpClient({
         params,
         method: 'all',
       }),
-    });
+    };
+    
+    try {
+      const response = await fetchFn(`${formattedProxyUrl}/query`, fetchOptions);
 
     if (!response.ok) {
       let errorMessage = '';
@@ -42,11 +63,28 @@ export function createPgHttpClient({
       throw new Error(`PostgreSQL HTTP proxy error: ${errorMessage}`);
     }
 
-    return response.json() as Promise<any[]>;
+    const rows = await response.json() as any[];
+    // Format result to match what drizzle-orm/neon-http expects
+    return {
+      command: 'SELECT',
+      fields: [],  // Fields will be added by drizzle-orm
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+      rows: rows,
+      rowAsArray: false
+    };
+    } catch (error) {
+      console.error('Error connecting to PostgreSQL HTTP proxy:', error);
+      // Re-throw with a more helpful message
+      throw new Error(`Failed to connect to PostgreSQL HTTP proxy at ${formattedProxyUrl}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   // SQL tag template for handling raw SQL queries
-  const sql = (strings: TemplateStringsArray, ...values: unknown[]) => {
+  const sql = (strings: TemplateStringsArray, ...values: unknown[]): { 
+    query: string; 
+    params: unknown[]; 
+    execute: () => Promise<PgQueryResult>; 
+  } => {
     // Ensure we have a valid string to start with
     let query = strings[0] || '';
     const params: unknown[] = [];
@@ -67,21 +105,22 @@ export function createPgHttpClient({
   };
 
   // Transaction handling
-  const transaction = async (queries: { text: string, values: unknown[] }[]) => {
-    const response = await fetchFn(`${proxyUrl}/transaction`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
-      },
-      body: JSON.stringify({
-        queries: queries.map(q => ({
-          sql: q.text,
-          params: q.values,
-          method: 'all',
-        })),
-      }),
-    });
+  const transaction = async (queries: { text: string, values: unknown[] }[]): Promise<PgQueryResult[]> => {
+    try {
+      const response = await fetchFn(`${formattedProxyUrl}/transaction`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({
+          queries: queries.map(q => ({
+            sql: q.text,
+            params: q.values,
+            method: 'all',
+          })),
+        }),
+      });
 
     if (!response.ok) {
       let errorMessage = '';
@@ -94,7 +133,20 @@ export function createPgHttpClient({
       throw new Error(`PostgreSQL HTTP transaction error: ${errorMessage}`);
     }
 
-    return response.json() as Promise<any[]>;
+    const results = await response.json() as any[];
+    
+    // Format each result to match what drizzle-orm/neon-http expects
+    return Array.isArray(results) ? results.map(rows => ({
+      command: 'SELECT',
+      fields: [],
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+      rows: rows,
+      rowAsArray: false
+    })) : [];
+    } catch (error) {
+      console.error('Error executing transaction on PostgreSQL HTTP proxy:', error);
+      throw new Error(`Failed to execute transaction on PostgreSQL HTTP proxy at ${formattedProxyUrl}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   return {
