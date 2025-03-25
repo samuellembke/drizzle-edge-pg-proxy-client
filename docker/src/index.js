@@ -58,8 +58,8 @@ pool.on('error', (err) => {
 
 // Authentication hook
 app.addHook('preHandler', async (request, reply) => {
-  // Skip authentication for health check and OPTIONS requests
-  if (request.routerPath === '/health' || request.method === 'OPTIONS') {
+  // Skip authentication for health check, root path, and OPTIONS requests
+  if (request.url === '/health' || request.url === '/' || request.method === 'OPTIONS') {
     return;
   }
 
@@ -85,6 +85,20 @@ app.addHook('onRequest', async (request, reply) => {
   if (request.method === 'OPTIONS') {
     reply.code(204).send();
   }
+});
+
+// Root route to provide info about the service
+app.get('/', async () => {
+  return {
+    name: 'PostgreSQL HTTP Proxy',
+    version: '1.0.0',
+    endpoints: [
+      { path: '/query', method: 'POST', description: 'Execute SQL queries' },
+      { path: '/transaction', method: 'POST', description: 'Execute transactions' },
+      { path: '/health', method: 'GET', description: 'Health check endpoint' }
+    ],
+    documentation: 'https://github.com/samuellembke/drizzle-edge-pg-proxy-client'
+  };
 });
 
 // Health check route
