@@ -165,11 +165,24 @@ app.post('/query', async (request, reply) => {
   // Special handling for Auth.js operations - auto-fix RETURNING clauses
   const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
   const hasReturning = sql.toUpperCase().includes('RETURNING');
+  const isAccountInsert = isInsert && (sql.includes('_account') || sql.includes('account'));
+  const isUserInsert = isInsert && (sql.includes('_user') || sql.includes('user'));
   let modifiedSql = sql;
   
+  // Special handling for Auth.js account inserts with DEFAULT for user_id
+  if (isAccountInsert && sql.toLowerCase().includes('user_id') && sql.toLowerCase().includes('default')) {
+    request.log.warn('Auth.js account insert with DEFAULT for user_id detected - this will likely cause a constraint violation');
+    
+    // We could try to replace DEFAULT with a real user ID, but we need to know the user ID
+    // For now, we'll just log it and let the query run, as our client should handle this
+    request.log.warn({ 
+      sql, 
+      params 
+    }, 'Account insert with DEFAULT for user_id - check that Auth.js is properly creating user records first');
+  }
+  
   // Auto-add RETURNING clause for Auth.js operations if client hasn't already added it
-  if (isInsert && !hasReturning && 
-     (sql.includes('user') || sql.includes('account') || sql.includes('session'))) {
+  if (isInsert && !hasReturning && (isAccountInsert || isUserInsert || sql.includes('session'))) {
     request.log.info('Auth.js operation detected without RETURNING clause - auto-adding RETURNING *');
     modifiedSql = `${sql.trim()} RETURNING *`;
   }
@@ -256,6 +269,23 @@ app.post('/transaction', async (request, reply) => {
         if (!hasReturning) {
           request.log.info('Auto-adding RETURNING to account creation query');
           modifiedSql = `${sql.trim()} RETURNING *`;
+        }
+        
+        // Check for DEFAULT in user_id which will cause foreign key constraint violation
+        if (sql.toLowerCase().includes('user_id') && sql.toLowerCase().includes('default')) {
+          request.log.warn('Account insert with DEFAULT for user_id detected - this will likely cause a constraint violation');
+          
+          // If we have user IDs from previous operations in this transaction, we could
+          // replace DEFAULT with an actual user ID
+          if (createdUserIds.length > 0) {
+            const userId = createdUserIds[0];
+            request.log.info(`Found user ID ${userId} from previous operation, attempting to fix account query`);
+            
+            // Replace DEFAULT with the actual user ID
+            // Note: This is a basic implementation and may not work for all SQL variations
+            modifiedSql = sql.replace(/\(\s*default\s*,/i, `('${userId}',`);
+            request.log.info(`Modified account query: ${modifiedSql}`);
+          }
         }
         
         if (createdUserIds.length > 0) {
