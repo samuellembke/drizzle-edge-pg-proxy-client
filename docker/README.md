@@ -21,7 +21,7 @@ This directory contains a high-performance PostgreSQL HTTP proxy implementation 
 
 ## Quick Start
 
-1. Create a `.env` file in the `docker` directory with your configuration:
+1. Create a `.env` file in the repository root with your configuration:
 
 ```env
 AUTH_TOKEN=your-secret-token
@@ -30,7 +30,7 @@ AUTH_TOKEN=your-secret-token
 2. Start the proxy and PostgreSQL database:
 
 ```bash
-cd docker
+# From the repository root directory
 docker-compose up -d
 ```
 
