@@ -647,34 +647,43 @@ export function createPgHttpClient({
   };
 
   // Create a query function that directly executes SQL with parameters
+  // This version is specifically designed to be compatible with Auth.js
   const query = async (queryText: string, params: any[] = [], options?: {
     arrayMode?: boolean;
     fullResults?: boolean;
   }): Promise<PgQueryResult> => {
-    // Override array mode and full results settings
-    const queryArrayMode = options?.arrayMode ?? arrayMode;
-    const queryFullResults = options?.fullResults ?? fullResults;
-    
-    // Clone the headers for this specific query
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Neon-Raw-Text-Output': 'true',
-      'Neon-Array-Mode': String(queryArrayMode),
-      // IMPORTANT: Always include Authorization header if authToken is provided
-      ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
-    };
-    
-    const fetchOptions: RequestInit = {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        sql: queryText,
-        params: Array.isArray(params) ? params.map(param => encodeBuffersAsBytea(param)) : [],
-        method: 'all',
-      }),
-    };
-    
     try {
+      // Ensure parameters and options are validated
+      if (!queryText || typeof queryText !== 'string') {
+        throw new PgError('SQL query text is required and must be a string');
+      }
+      
+      // Make sure params is always an array
+      const safeParams = Array.isArray(params) ? params : [];
+      
+      // Override array mode and full results settings
+      const queryArrayMode = options?.arrayMode ?? arrayMode;
+      const queryFullResults = options?.fullResults ?? fullResults;
+      
+      // Clone the headers for this specific query
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Neon-Raw-Text-Output': 'true',
+        'Neon-Array-Mode': String(queryArrayMode),
+        // IMPORTANT: Always include Authorization header if authToken is provided
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+      };
+      
+      const fetchOptions: RequestInit = {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sql: queryText,
+          params: safeParams.map(param => encodeBuffersAsBytea(param)),
+          method: 'all',
+        }),
+      };
+      
       const response = await fetchFn(`${formattedProxyUrl}/query`, fetchOptions);
 
       if (!response.ok) {
@@ -700,16 +709,12 @@ export function createPgHttpClient({
       }
 
       // Parse the rows from the response
-      const result = await response.json() as any;
-      
-      // If the response already has the Neon format
-      if (result.command && result.fields && Array.isArray(result.rows)) {
-        // Process with type parsers
-        return processQueryResult(result, typeParser, queryArrayMode);
+      let result: any;
+      try {
+        result = await response.json();
+      } catch (jsonError) {
+        throw new PgError(`Failed to parse JSON response: ${jsonError}`);
       }
-      
-      // Handle simpler format (just an array of rows)
-      const rows = Array.isArray(result) ? result : (result?.rows || []);
       
       // Determine command type from the query for proper result formatting
       let command = 'SELECT';
@@ -718,20 +723,31 @@ export function createPgHttpClient({
       else if (upperQuery.startsWith('UPDATE')) command = 'UPDATE';
       else if (upperQuery.startsWith('DELETE')) command = 'DELETE';
       
-      // Create a structured result
-      const structuredResult = {
+      // Ensure we have a valid rows array
+      let rows: any[] = [];
+      if (Array.isArray(result)) {
+        rows = result;
+      } else if (result && Array.isArray(result.rows)) {
+        rows = result.rows;
+      }
+      
+      // Ensure we have valid fields array
+      const fields = Array.isArray(result?.fields) ? result.fields : [];
+      
+      // Create a properly structured result that matches PostgreSQL's native format
+      const structuredResult: PgQueryResult = {
         command,
-        fields: result?.fields || [],
-        rowCount: Array.isArray(rows) ? rows.length : 0,
-        rows: rows,
-        rowAsArray: queryArrayMode
+        fields,
+        rowCount: rows.length,
+        rows,
+        rowAsArray: queryArrayMode,
       };
       
       // Process with type parsers
       const processed = processQueryResult(structuredResult, typeParser, queryArrayMode);
       
-      // Return the processed result or just the rows based on fullResults
-      return queryFullResults ? processed : processed.rows;
+      // Always return a full result object with rows
+      return processed;
     } catch (error) {
       if (error instanceof PgError) {
         throw error;

@@ -42,11 +42,34 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
 
   // CRITICAL: Expose the client's query method directly on the db object
   // This is what Auth.js DrizzleAdapter looks for
+  // Wrap the query method to ensure it's always called with proper context
+  // and always returns a properly structured result
   Object.defineProperty(db, 'query', {
     enumerable: true,
     configurable: true,
     writable: true,
-    value: pgClient.query.bind(pgClient)
+    value: async function(queryText: string, params?: any[], options?: any) {
+      try {
+        // Call the query method with the correct context and arguments
+        const result = await pgClient.query(queryText, params || [], options);
+        
+        // Ensure the result has a rows property
+        if (!result || !result.rows) {
+          return {
+            command: 'SELECT',
+            rowCount: 0,
+            fields: [],
+            rows: [],
+            rowAsArray: false
+          };
+        }
+        
+        return result;
+      } catch (error) {
+        console.error('Error in query method:', error);
+        throw error;
+      }
+    }
   });
   
   // Also expose other methods for direct access if needed

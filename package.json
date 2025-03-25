@@ -1,6 +1,6 @@
 {
   "name": "drizzle-edge-pg-proxy-client",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "PostgreSQL HTTP client compatible with Neon's interface for edge environments",
   "type": "module",
   "main": "./dist/index.cjs",
