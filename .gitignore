@@ -17,11 +17,11 @@ yarn-debug.log*
 yarn-error.log*
 
 # Environment
-.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+# Not ignoring the main .env file as it's needed for Coolify
 
 # Editor directories and files
 .idea
