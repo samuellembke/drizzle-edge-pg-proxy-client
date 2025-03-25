@@ -21,6 +21,8 @@ services:
       - DB_POOL_IDLE_TIMEOUT=10000
       # Enable response compression
       - ENABLE_COMPRESSION=true
+      # Logging level (debug, info, warn, error)
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     ports:
       - "${HTTP_PORT:-7432}:${CONTAINER_PORT:-8080}"
     healthcheck:

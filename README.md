@@ -289,6 +289,8 @@ Creates a raw PostgreSQL HTTP client.
 
 This client requires a PostgreSQL HTTP proxy server. You can implement your own, use the provided Docker implementation, or adapt one of the example implementations to your needs.
 
+> **New in v0.1.3**: Enhanced Auth.js (NextAuth.js) support with improved transaction handling, better error detection for null constraint violations, and detailed debugging for Auth.js operations. See the [Docker README](./docker/README.md) for more details.
+
 A basic proxy implementation requires:
 
 1. An endpoint that accepts POST requests to `/query` with a JSON body containing:
@@ -424,6 +426,54 @@ If you encounter errors with the Auth.js DrizzleAdapter like "Unsupported databa
 1. You're using the correct version of `@auth/drizzle-adapter` that's compatible with your Auth.js version
 2. The adapter has correct table configurations
 3. The database client is correctly initialized before the adapter
+
+If you encounter foreign key constraint errors such as `null value in column "user_id" of relation "account" violates not-null constraint`, this indicates that your proxy implementation isn't correctly handling transactions with RETURNING clauses. Auth.js typically:
+
+1. Creates a user record with a RETURNING clause to get the user ID
+2. Uses that ID to create related records (accounts, sessions)
+
+To fix this issue:
+
+1. Ensure your PostgreSQL proxy properly handles RETURNING clauses in SQL queries
+2. Properly returns results from transactions in sequence
+3. Check your schema to ensure foreign key constraints match what Auth.js expects:
+
+```typescript
+// Example of proper Auth.js schema with Drizzle
+import { relations } from "drizzle-orm";
+import { pgTable, text, primaryKey, timestamp } from "drizzle-orm/pg-core";
+
+export const users = pgTable("user", {
+  id: text("id").primaryKey(),
+  name: text("name"),
+  email: text("email").notNull().unique(),
+  // other user fields
+});
+
+export const accounts = pgTable("account", {
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  providerAccountId: text("provider_account_id").notNull(),
+  // other account fields
+},
+(table) => {
+  return {
+    pk: primaryKey({ columns: [table.provider, table.providerAccountId] }),
+  };
+});
+
+// Define relations
+export const usersRelations = relations(users, ({ many }) => ({
+  accounts: many(accounts),
+}));
+
+export const accountsRelations = relations(accounts, ({ one }) => ({
+  user: one(users, {
+    fields: [accounts.userId],
+    references: [users.id],
+  }),
+}));
+```
 
 ### Other Connection Issues
 

@@ -1,6 +1,6 @@
 {
   "name": "drizzle-edge-pg-proxy-client",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Client for Drizzle PostgreSQL edge proxy in edge environments",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -39,7 +39,11 @@
     "edge",
     "serverless",
     "http",
-    "database"
+    "database",
+    "auth.js",
+    "nextauth",
+    "authentication",
+    "next.js"
   ],
   "scripts": {
     "build": "tsup",

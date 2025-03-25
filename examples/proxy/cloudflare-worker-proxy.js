@@ -150,6 +150,9 @@ async function handleTransaction(request, env, corsHeaders) {
     });
   }
 
+  // Log transaction details for debugging
+  console.log('Transaction with', queries.length, 'queries');
+  
   // In this example, we manually manage the transaction
   // This approach may vary depending on your PostgreSQL provider
   const results = [];
@@ -159,8 +162,27 @@ async function handleTransaction(request, env, corsHeaders) {
   
   try {
     // Execute each query in sequence
+    // Critical for Auth.js: Order matters here because later queries may depend on results from earlier ones
     for (const query of queries) {
       const { sql, params = [] } = query;
+      
+      // Log each query in the transaction
+      console.log('Transaction query:', sql, params);
+      
+      // Special handling for Auth.js user/account linking operations
+      const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
+      const isUserInsert = isInsert && sql.includes('user');
+      const isAccountInsert = isInsert && sql.includes('account');
+      
+      // Auth.js typically creates a user, then links an account
+      // The user ID from the first query is needed for the second
+      if (isUserInsert) {
+        console.log('User creation detected in transaction');
+      }
+      if (isAccountInsert) {
+        console.log('Account creation detected in transaction');
+      }
+      
       const result = await executeNeonQuery(sql, params, env);
       results.push(result);
     }
@@ -169,6 +191,7 @@ async function handleTransaction(request, env, corsHeaders) {
     await executeNeonQuery('COMMIT', [], env);
   } catch (error) {
     // Rollback on error
+    console.error('Transaction error:', error);
     await executeNeonQuery('ROLLBACK', [], env);
     throw error;
   }
@@ -187,6 +210,19 @@ async function handleTransaction(request, env, corsHeaders) {
  * Note: This is a simplified example. Adapt it to your PostgreSQL provider.
  */
 async function executeNeonQuery(sql, params, env) {
+  // Log queries for debugging
+  console.log('Executing query:', sql, params);
+  
+  // Special handling for Auth.js operations - add logging for debugging
+  const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
+  const hasReturning = sql.toUpperCase().includes('RETURNING');
+  
+  // Auth.js needs RETURNING clauses for proper operation
+  if (isInsert && !hasReturning && 
+     (sql.includes('user') || sql.includes('account') || sql.includes('session'))) {
+    console.log('Warning: Auth.js might need RETURNING clause for this operation');
+  }
+
   const response = await fetch(`https://console.neon.tech/api/v2/projects/${env.NEON_PROJECT_ID}/query`, {
     method: 'POST',
     headers: {
@@ -205,5 +241,7 @@ async function executeNeonQuery(sql, params, env) {
   }
 
   const data = await response.json();
+  
+  // For Auth.js compatibility, ensure we return query results in correct format
   return data.rows || [];
 }

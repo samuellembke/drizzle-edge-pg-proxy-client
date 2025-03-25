@@ -107,6 +107,11 @@ export function createPgHttpClient({
   // Transaction handling
   const transaction = async (queries: { text: string, values: unknown[] }[]): Promise<PgQueryResult[]> => {
     try {
+      // For AuthJS, transaction operations are typically:
+      // 1. Insert user
+      // 2. Get last insert ID (returning clause)
+      // 3. Insert account with user_id
+      
       const response = await fetchFn(`${formattedProxyUrl}/transaction`, {
         method: 'POST',
         headers: {

@@ -22,9 +22,28 @@ const config = {
   enableCompression: process.env.ENABLE_COMPRESSION === 'true',
 };
 
+// Logger configuration
+const logLevel = process.env.LOG_LEVEL || 'info';
+
 // Create the app
 const app = Fastify({
-  logger: true,
+  logger: {
+    level: logLevel,
+    // Add timestamp to logs
+    timestamp: true,
+    // Optional: Customize log serialization for better readability of SQL queries
+    serializers: {
+      req: (req) => {
+        return {
+          method: req.method,
+          url: req.url,
+          path: req.routerPath,
+          parameters: req.params,
+          // Don't log headers or full body for security/privacy
+        };
+      }
+    }
+  },
   trustProxy: true,
   // Increase the JSON body size limit if needed
   bodyLimit: 1048576, // 1MB
@@ -139,9 +158,25 @@ app.post('/query', async (request, reply) => {
   if (method !== 'all' && method !== 'single') {
     return reply.code(400).send({ error: 'Invalid method. Use "all" or "single".' });
   }
+  
+  // Log query for debugging (helpful for Auth.js issues)
+  request.log.debug({ sql, params }, 'Executing query');
+  
+  // Special handling for Auth.js operations - add logging for debugging
+  const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
+  const hasReturning = sql.toUpperCase().includes('RETURNING');
+  
+  // Auth.js needs RETURNING clauses for proper operation
+  if (isInsert && !hasReturning && 
+     (sql.includes('user') || sql.includes('account') || sql.includes('session'))) {
+    request.log.warn('Auth.js operation detected without RETURNING clause - this may cause constraint violations');
+  }
 
   try {
     const result = await pool.query(sql, params);
+    
+    // Log results for debugging
+    request.log.debug({ rowCount: result.rowCount }, 'Query completed');
 
     // Return the appropriate result based on the method
     if (method === 'single') {
@@ -161,6 +196,9 @@ app.post('/transaction', async (request, reply) => {
   if (!queries || !Array.isArray(queries)) {
     return reply.code(400).send({ error: 'An array of queries is required' });
   }
+  
+  // Log transaction details for debugging
+  request.log.debug({ queryCount: queries.length }, 'Starting transaction');
 
   // Get a client from the pool
   const client = await pool.connect();
@@ -171,9 +209,40 @@ app.post('/transaction', async (request, reply) => {
 
     // Execute all queries
     const results = [];
-    for (const query of queries) {
+    
+    // Track information about user creation for Auth.js debugging
+    let createdUserIds = [];
+    let authJsOperationDetected = false;
+    
+    for (let i = 0; i < queries.length; i++) {
+      const query = queries[i];
       const { sql, params = [], method = 'all' } = query;
       
+      // Log each query in the transaction
+      request.log.debug({ index: i, sql, params }, 'Transaction query');
+      
+      // Special handling for Auth.js operations
+      const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
+      const isUserInsert = isInsert && sql.includes('user');
+      const isAccountInsert = isInsert && sql.includes('account');
+      const hasReturning = sql.toUpperCase().includes('RETURNING');
+      
+      // Auth.js typically creates a user first, then links accounts
+      if (isUserInsert) {
+        request.log.info('User creation detected in transaction');
+        authJsOperationDetected = true;
+      }
+      
+      if (isAccountInsert) {
+        request.log.info('Account creation detected in transaction');
+        if (createdUserIds.length > 0) {
+          request.log.debug({ userIds: createdUserIds }, 'User IDs available for linking');
+        } else {
+          request.log.warn('Account creation without prior user creation detected');
+        }
+      }
+      
+      // Execute the query
       const result = await client.query(sql, params);
       
       // Handle different result methods
@@ -182,10 +251,26 @@ app.post('/transaction', async (request, reply) => {
       } else {
         results.push(result.rows);
       }
+      
+      // Store user IDs from RETURNING clauses for Auth.js debugging
+      if (isUserInsert && hasReturning && result.rows.length > 0) {
+        const userIds = result.rows.map(row => row.id).filter(Boolean);
+        createdUserIds = [...createdUserIds, ...userIds];
+        request.log.debug({ newUserIds: userIds }, 'User IDs from RETURNING clause');
+      }
     }
 
     // Commit the transaction
     await client.query('COMMIT');
+    
+    // Log summary for debugging
+    if (authJsOperationDetected) {
+      request.log.info({ 
+        success: true, 
+        queries: queries.length,
+        userIds: createdUserIds
+      }, 'Auth.js transaction completed');
+    }
 
     return results;
   } catch (error) {

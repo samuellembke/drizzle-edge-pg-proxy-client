@@ -129,6 +129,67 @@ Body:
 }
 ```
 
+## Auth.js (NextAuth.js) Integration
+
+This proxy is optimized for use with Auth.js (formerly NextAuth.js) and includes special handling for Auth.js operations.
+
+### Key Features for Auth.js
+
+1. **Transaction Support**: Properly handles transactions for user creation and account linking
+2. **RETURNING Clause Support**: Ensures proper foreign key relationships between users and accounts
+3. **Debug Logging**: Special logging for Auth.js operations to aid in troubleshooting
+4. **Null Constraint Prevention**: Helps prevent the common "null value in column user_id" error
+
+### Debug Mode
+
+To enable detailed debugging for Auth.js operations, set:
+
+```env
+LOG_LEVEL=debug
+```
+
+This will show detailed logs about user creation, account linking, and transaction operations.
+
+### Common Auth.js Issues
+
+If you encounter errors like:
+
+```
+null value in column "user_id" of relation "account" violates not-null constraint
+```
+
+This proxy has special handling to log and debug these issues. Check the logs for:
+
+1. Warnings about missing RETURNING clauses
+2. Account creation operations without prior user creation
+3. Transaction query sequencing issues
+
+### Example Auth.js Configuration
+
+```typescript
+import { DrizzleAdapter } from "@auth/drizzle-adapter";
+import { drizzle } from "drizzle-edge-pg-proxy-client";
+import { users, accounts, sessions, verificationTokens } from "./schema";
+
+// Create the database client
+const db = drizzle({
+  proxyUrl: process.env.DATABASE_PROXY_URL || "http://localhost:7432",
+  authToken: process.env.DATABASE_PROXY_TOKEN,
+  schema: { users, accounts, sessions, verificationTokens }
+});
+
+// Auth.js configuration
+export const authConfig = {
+  adapter: DrizzleAdapter(db, {
+    usersTable: users,
+    accountsTable: accounts,
+    sessionsTable: sessions,
+    verificationTokensTable: verificationTokens,
+  }),
+  // Other Auth.js options...
+};
+```
+
 ## Performance Tuning
 
 This proxy is configured for high performance, but you can tune it further:

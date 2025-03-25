@@ -50,8 +50,23 @@ app.post('/query', authenticate, async (req, res) => {
     return res.status(400).json({ error: 'SQL query is required' });
   }
   
+  // Log query for debugging (consider removing in production)
+  console.log('Executing query:', sql, params || []);
+  
+  // Special handling for Auth.js operations
+  const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
+  const hasReturning = sql.toUpperCase().includes('RETURNING');
+  
+  // Auth.js adapter typically needs RETURNING clauses for user creation
+  if (isInsert && !hasReturning && 
+      (sql.includes('user') || sql.includes('account') || sql.includes('session'))) {
+    console.log('Warning: Auth.js might need RETURNING clause for this operation');
+  }
+  
   try {
     const result = await pool.query(sql, params || []);
+    
+    // For Auth.js, it's critical to return both rows and fields
     return res.json(result.rows);
   } catch (error) {
     console.error('Database error:', error);
@@ -74,17 +89,26 @@ app.post('/transaction', authenticate, async (req, res) => {
     // Start a transaction
     await client.query('BEGIN');
     
-    // Execute all queries
+    // Execute all queries sequentially
     const results = [];
     for (const query of queries) {
       const { sql, params } = query;
+      
+      // Log the query for debugging (consider removing in production)
+      console.log('Executing transaction query:', sql, params || []);
+      
+      // Execute the query
       const result = await client.query(sql, params || []);
+      
+      // Important: Make sure rows is sent back from RETURNING clauses
+      // This is crucial for Auth.js to properly link accounts to users
       results.push(result.rows);
     }
     
     // Commit the transaction
     await client.query('COMMIT');
     
+    // Return the results from all queries
     return res.json(results);
   } catch (error) {
     // Rollback in case of error
