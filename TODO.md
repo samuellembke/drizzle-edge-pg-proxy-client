@@ -1,0 +1,131 @@
+# TODO: Enhance Client to Match Neon's Robustness
+
+This document outlines the improvements needed to bring our `drizzle-edge-pg-proxy-client` to the same level of robustness as Neon's `@neondatabase/serverless` client.
+
+## Error Handling Enhancements
+
+- [ ] Create a proper `PgError` class that extends `Error` with PostgreSQL-specific fields:
+  - [ ] Add severity levels (ERROR, FATAL, PANIC, etc.)
+  - [ ] Add error codes (based on PostgreSQL SQLSTATE codes)
+  - [ ] Add detail, hint, position fields
+  - [ ] Add schema, table, column references
+  - [ ] Add file, line, routine for debugging
+- [ ] Implement proper error deserialization from HTTP responses
+- [ ] Add specific error types for different categories (connection, query, transaction)
+- [ ] Improve error messages with contextual information
+
+## SQL Query Processing
+
+- [ ] Enhance parameter binding with full PostgreSQL type awareness
+- [ ] Improve SQL template composition with proper recursive handling
+- [ ] Implement better value serialization for complex types (arrays, JSON, etc.)
+- [ ] Add validation for SQL statements
+- [ ] Support named parameters in addition to positional parameters
+- [ ] Handle binary data encoding properly (bytea format)
+
+## Type System Integration
+
+- [ ] Implement proper type mapping between PostgreSQL and JavaScript types
+- [ ] Add support for custom type parsers
+- [ ] Handle array types properly
+- [ ] Add proper timestamp/date handling with timezone awareness
+- [ ] Support for numeric types with precision
+- [ ] Handle JSON/JSONB types correctly
+
+## Query Features
+
+- [ ] Implement query cancellation mechanism
+- [ ] Add support for cursor-based pagination
+- [ ] Support for listening to PostgreSQL notifications
+- [ ] Implement prepared statements for better performance
+- [ ] Add query timeout options
+
+## Transaction Management
+
+- [ ] Add support for different isolation levels:
+  - [ ] READ UNCOMMITTED
+  - [ ] READ COMMITTED
+  - [ ] REPEATABLE READ
+  - [ ] SERIALIZABLE
+- [ ] Implement read-only transaction support
+- [ ] Add deferrable transaction support
+- [ ] Support for savepoints within transactions
+- [ ] Better handling of transaction failures and retries
+
+## Connection Management
+
+- [ ] Implement connection pooling for better performance
+- [ ] Add connection timeout and retry logic
+- [ ] Support for connection health checks
+- [ ] Implement connection string validation and normalization
+- [ ] Add connection events (connected, disconnected, error)
+
+## Result Handling
+
+- [ ] Enhance result parsing for all PostgreSQL data types
+- [ ] Support for array mode vs object mode in results
+- [ ] Add streaming result support for large datasets
+- [ ] Implement proper field metadata handling
+- [ ] Better handling of empty results
+
+## Authentication Improvements
+
+- [ ] Support for different authentication methods
+- [ ] Add token refresh functionality
+- [ ] Implement function-based token providers
+- [ ] Support for client certificates
+
+## Performance Optimization
+
+- [ ] Optimize parameter serialization
+- [ ] Reduce memory usage for large results
+- [ ] Add request batching for better throughput
+- [ ] Implement connection reuse strategies
+- [ ] Add metrics gathering for performance monitoring
+
+## Documentation and Examples
+
+- [ ] Create comprehensive API documentation
+- [ ] Add examples for common use cases
+- [ ] Document known limitations
+- [ ] Create migration guides from other libraries
+- [ ] Add best practices documentation
+
+## Testing
+
+- [ ] Implement comprehensive unit tests for all components
+- [ ] Add integration tests with actual PostgreSQL
+- [ ] Create stress tests for performance validation
+- [ ] Add compatibility tests with different frameworks (Next.js, Auth.js, etc.)
+- [ ] Test against different PostgreSQL versions
+
+## Server-Side Improvements
+
+- [ ] Enhance the proxy server to support all PostgreSQL features
+- [ ] Add proper statement timeout handling
+- [ ] Implement better logging for debugging
+- [ ] Support for multiple result formats
+- [ ] Add proper HTTP/2 support for better performance
+
+## Security Enhancements
+
+- [ ] Implement proper input validation
+- [ ] Add support for SSL/TLS configuration
+- [ ] Implement statement timeout to prevent DoS
+- [ ] Add proper handling of sensitive information in logs
+- [ ] Support for connection encryption options
+
+## Priority Implementation Order
+
+1. Error handling improvements
+2. SQL query processing enhancements
+3. Type system integration
+4. Transaction management
+5. Result handling improvements
+6. Connection management
+7. Performance optimizations
+8. Authentication improvements
+9. Testing
+10. Documentation and examples
+
+This implementation plan will help ensure that our client matches or exceeds the robustness of Neon's implementation while maintaining compatibility with both Drizzle ORM and Auth.js.
