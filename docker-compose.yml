@@ -1,15 +1,16 @@
 version: '3.8'
 
 services:
-  pg-proxy:
+  drizzle-pg-proxy:
     build:
       context: .
       dockerfile: Dockerfile
     image: drizzle-edge-pg-proxy-client:bun
-    container_name: pg-proxy
+    container_name: drizzle-pg-proxy
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres
+      - DATABASE_URL=postgres://postgres:postgres@drizzle-postgres:5432/postgres
+      # We're still using port 5432 inside the Docker network since that's the internal port
       - AUTH_TOKEN=${AUTH_TOKEN:-}
       - PORT=8080
       # Performance tuning
@@ -23,7 +24,7 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      postgres:
+      drizzle-postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
@@ -33,15 +34,15 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  postgres:
+  drizzle-postgres:
     image: postgres:16-alpine
-    container_name: postgres
+    container_name: drizzle-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
