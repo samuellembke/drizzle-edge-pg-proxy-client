@@ -87,11 +87,11 @@ describe('PostgreSQL HTTP Client', () => {
     const query = client.sql`SELECT * FROM users WHERE id = ${userId} AND name = ${name}`;
     
     // Verify query is formatted correctly
-    expect(query.query).toBe('SELECT * FROM users WHERE id = $1 AND name = $2');
-    expect(query.params).toEqual([1, 'Test']);
+    expect(query.queryData.query).toBe('SELECT * FROM users WHERE id = $1 AND name = $2');
+    expect(query.queryData.params).toEqual([1, 'Test']);
 
-    // Execute the query
-    await query.execute();
+    // Execute the query (using the Promise interface)
+    await query;
 
     // Verify fetch was called correctly
     expect(mockFetch).toHaveBeenCalledWith('https://test-proxy.com/query', {

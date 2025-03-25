@@ -28,13 +28,29 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
   const db = drizzleOrm(pgClient as any, { schema });
 
   // This is the critical part for Auth.js compatibility
-  // The DrizzleAdapter directly accesses db.query
+  // The DrizzleAdapter directly accesses db.query method
   // We need to ensure it's available and properly bound
   Object.defineProperty(db, 'query', {
     enumerable: true,
     configurable: true,
     writable: true,
-    value: pgClient.query
+    value: pgClient.query.bind(pgClient)  // Important: bind the method to maintain 'this' context
+  });
+  
+  // Also expose the client for direct access if needed
+  Object.defineProperty(db, 'client', {
+    enumerable: true,
+    configurable: true,
+    writable: false,
+    value: pgClient
+  });
+  
+  // Add direct sql method access too
+  Object.defineProperty(db, 'sql', {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value: pgClient.sql
   });
 
   return db;

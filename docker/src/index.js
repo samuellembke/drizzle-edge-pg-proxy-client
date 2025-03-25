@@ -146,9 +146,9 @@ app.get('/health', async () => {
   }
 });
 
-// Query endpoint
+// Query endpoint with enhanced Auth.js support
 app.post('/query', async (request, reply) => {
-  const { sql, params = [], method = 'all' } = request.body;
+  const { sql, params = [], method = 'all', context = {} } = request.body;
 
   if (!sql) {
     return reply.code(400).send({ error: 'SQL query is required' });
@@ -159,44 +159,78 @@ app.post('/query', async (request, reply) => {
     return reply.code(400).send({ error: 'Invalid method. Use "all" or "single".' });
   }
   
-  // Log query for debugging (helpful for Auth.js issues)
-  request.log.debug({ sql, params }, 'Executing query');
+  // Log query for debugging
+  request.log.debug({ sql, params, context }, 'Executing query');
   
-  // Special handling for Auth.js operations - auto-fix RETURNING clauses
+  // Enhanced detection for Auth.js operations
   const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
   const hasReturning = sql.toUpperCase().includes('RETURNING');
+  const isAuthJsOperation = context.isAuthJs || false;
+  
+  // More specific detection for Auth.js tables
   const isAccountInsert = isInsert && (sql.includes('_account') || sql.includes('account'));
   const isUserInsert = isInsert && (sql.includes('_user') || sql.includes('user'));
-  let modifiedSql = sql;
+  const isSessionQuery = sql.includes('_session') || sql.includes('session');
   
-  // Special handling for Auth.js account inserts with DEFAULT for user_id
+  let modifiedSql = sql;
+  let fixedParams = [...params];
+  
+  // Enhanced handling for Auth.js account inserts with DEFAULT for user_id
   if (isAccountInsert && sql.toLowerCase().includes('user_id') && sql.toLowerCase().includes('default')) {
-    request.log.warn('Auth.js account insert with DEFAULT for user_id detected - this will likely cause a constraint violation');
+    request.log.warn('Auth.js account insert with DEFAULT for user_id detected');
     
-    // We could try to replace DEFAULT with a real user ID, but we need to know the user ID
-    // For now, we'll just log it and let the query run, as our client should handle this
-    request.log.warn({ 
-      sql, 
-      params 
-    }, 'Account insert with DEFAULT for user_id - check that Auth.js is properly creating user records first');
+    try {
+      // Look up the most recently inserted user ID to link with this account
+      // This assumes Auth.js is creating users first, then accounts (which is typically the case)
+      const userLookup = await pool.query(
+        "SELECT id FROM users ORDER BY created_at DESC LIMIT 1"
+      );
+      
+      if (userLookup.rows.length > 0) {
+        const userId = userLookup.rows[0].id;
+        request.log.info(`Found recent user ID: ${userId}, attempting to fix account query`);
+        
+        // Try to fix the query by replacing DEFAULT with the actual user ID
+        const defaultRegex = /\(\s*default\s*,/i;
+        if (defaultRegex.test(modifiedSql)) {
+          modifiedSql = modifiedSql.replace(defaultRegex, `($1,`);
+          
+          // Add the user ID as the first parameter and shift all others
+          fixedParams = [userId, ...params];
+          
+          request.log.info({ 
+            originalSql: sql,
+            modifiedSql,
+            userId
+          }, 'Modified account query with actual user ID');
+        } else {
+          request.log.warn('Could not safely replace DEFAULT in query - using original query');
+        }
+      } else {
+        request.log.warn('No recent user found for account linking - this will likely cause a constraint violation');
+      }
+    } catch (lookupError) {
+      request.log.error({ error: lookupError }, 'Error looking up user ID for account linking');
+    }
   }
   
-  // Auto-add RETURNING clause for Auth.js operations if client hasn't already added it
-  if (isInsert && !hasReturning && (isAccountInsert || isUserInsert || sql.includes('session'))) {
+  // Auto-add RETURNING clause for Auth.js operations if not already present
+  if (isInsert && !hasReturning && (isAuthJsOperation || isAccountInsert || isUserInsert || isSessionQuery)) {
     request.log.info('Auth.js operation detected without RETURNING clause - auto-adding RETURNING *');
-    modifiedSql = `${sql.trim()} RETURNING *`;
+    modifiedSql = `${modifiedSql.trim()} RETURNING *`;
   }
 
   try {
-    // Use the modified SQL with RETURNING * if applicable
-    const result = await pool.query(modifiedSql, params);
+    // Execute the modified query with potentially fixed parameters
+    const result = await pool.query(modifiedSql, fixedParams);
     
     // Log results for debugging
-    request.log.debug({ 
+    request.log.info({ 
       rowCount: result.rowCount,
-      returnedFirstRow: result.rows[0] ? true : false,
-      operation: isInsert ? 'INSERT' : 'query'
-    }, 'Query completed');
+      hasRows: result.rows.length > 0,
+      operation: isInsert ? 'INSERT' : 'QUERY',
+      isAuthJs: isAuthJsOperation || isAccountInsert || isUserInsert || isSessionQuery,
+    }, 'Query completed successfully');
 
     // Return the appropriate result based on the method
     if (method === 'single') {
@@ -204,21 +238,52 @@ app.post('/query', async (request, reply) => {
     }
     return result.rows;
   } catch (error) {
-    request.log.error({ error, sql: modifiedSql }, 'Database query error');
+    request.log.error({ 
+      error, 
+      sql: modifiedSql,
+      params: fixedParams,
+      isAuthJs: isAuthJsOperation || isAccountInsert || isUserInsert || isSessionQuery,
+    }, 'Database query error');
+    
+    // For Auth.js errors, provide more context
+    if (isAuthJsOperation || isAccountInsert || isUserInsert || isSessionQuery) {
+      if (error.message.includes('violates not-null constraint') && error.message.includes('user_id')) {
+        return reply.code(500).send({ 
+          error: error.message,
+          details: {
+            type: 'auth_js_error',
+            message: 'Auth.js account insert failed - missing user ID. Make sure users are created before accounts.',
+            recommendation: 'Check Auth.js adapter implementation or sequence of operations.'
+          } 
+        });
+      }
+    }
+    
     return reply.code(500).send({ error: error.message });
   }
 });
 
-// Transaction endpoint
+// Transaction endpoint with enhanced Auth.js support
 app.post('/transaction', async (request, reply) => {
-  const { queries } = request.body;
+  const { queries, context = {} } = request.body;
 
   if (!queries || !Array.isArray(queries)) {
     return reply.code(400).send({ error: 'An array of queries is required' });
   }
   
+  // Detect Auth.js operations in the transaction
+  const isAuthJsTransaction = context.isAuthJs || 
+    queries.some(q => 
+      q.sql.includes('_user') || 
+      q.sql.includes('_account') || 
+      q.sql.includes('_session')
+    );
+  
   // Log transaction details for debugging
-  request.log.debug({ queryCount: queries.length }, 'Starting transaction');
+  request.log.info({ 
+    queryCount: queries.length, 
+    isAuthJs: isAuthJsTransaction 
+  }, 'Starting transaction');
 
   // Get a client from the pool
   const client = await pool.connect();
@@ -230,10 +295,30 @@ app.post('/transaction', async (request, reply) => {
     // Execute all queries
     const results = [];
     
-    // Track information about user creation for Auth.js debugging
+    // Track information about user creation for Auth.js debugging and fixing
     let createdUserIds = [];
-    let authJsOperationDetected = false;
+    let authJsUserInsertDetected = false;
+    let pendingAccountInserts = [];
     
+    // First pass - identify the sequence and collect user IDs
+    for (let i = 0; i < queries.length; i++) {
+      const query = queries[i];
+      const { sql } = query;
+      
+      const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
+      const isUserInsert = isInsert && (sql.includes('_user') || sql.includes(' user'));
+      const isAccountInsert = isInsert && (sql.includes('_account') || sql.includes(' account'));
+      
+      if (isUserInsert) {
+        authJsUserInsertDetected = true;
+      }
+      
+      if (isAccountInsert && sql.toLowerCase().includes('user_id') && sql.toLowerCase().includes('default')) {
+        pendingAccountInserts.push(i);
+      }
+    }
+    
+    // Process each query in the transaction
     for (let i = 0; i < queries.length; i++) {
       const query = queries[i];
       const { sql, params = [], method = 'all' } = query;
@@ -241,96 +326,213 @@ app.post('/transaction', async (request, reply) => {
       // Log each query in the transaction
       request.log.debug({ index: i, sql, params }, 'Transaction query');
       
-      // Special handling for Auth.js operations
+      // Detect operation type
       const isInsert = sql.trim().toUpperCase().startsWith('INSERT');
-      const isUserInsert = isInsert && sql.includes('user');
-      const isAccountInsert = isInsert && sql.includes('account');
+      const isUserInsert = isInsert && (sql.includes('_user') || sql.includes(' user'));
+      const isAccountInsert = isInsert && (sql.includes('_account') || sql.includes(' account'));
       const hasReturning = sql.toUpperCase().includes('RETURNING');
       
-      // Auto-add RETURNING for Auth.js operations
+      // Prepare modified SQL and parameters
       let modifiedSql = sql;
+      let modifiedParams = [...params];
       
-      // Auth.js typically creates a user first, then links accounts
-      if (isUserInsert) {
-        request.log.info('User creation detected in transaction');
-        authJsOperationDetected = true;
-        
-        // Add RETURNING if needed for user creation
-        if (!hasReturning) {
-          request.log.info('Auto-adding RETURNING to user creation query');
-          modifiedSql = `${sql.trim()} RETURNING *`;
+      // Auto-add RETURNING for Auth.js operations if needed
+      if (isInsert && !hasReturning && (isUserInsert || isAccountInsert || sql.includes('session'))) {
+        request.log.info(`Auto-adding RETURNING to query ${i}`);
+        modifiedSql = `${sql.trim()} RETURNING *`;
+      }
+      
+      // Fix account inserts with DEFAULT for user_id when we have user IDs
+      if (isAccountInsert && sql.toLowerCase().includes('user_id') && sql.toLowerCase().includes('default')) {
+        if (createdUserIds.length > 0) {
+          const userId = createdUserIds[0]; // Use the most recent user ID
+          request.log.info(`Found user ID ${userId} from previous operation for query ${i}`);
+          
+          // Try different strategies to replace DEFAULT with the user ID parameter
+          const defaultRegex = /\(\s*default\s*,/i;
+          if (defaultRegex.test(modifiedSql)) {
+            // Use parameterized replacement for better security
+            modifiedSql = modifiedSql.replace(defaultRegex, `($1,`);
+            modifiedParams = [userId, ...params];
+            
+            request.log.info({ 
+              originalSql: sql,
+              modifiedSql,
+              userId
+            }, `Modified account query ${i} with actual user ID`);
+          } else {
+            // If we can't safely replace with regex, try an alternative approach
+            // This is a fallback and may not work for all SQL variants
+            request.log.warn(`Could not safely replace DEFAULT in query ${i} - attempting alternative approach`);
+            
+            // Extract the column names and values structure
+            const columnsMatch = sql.match(/insert\s+into\s+\S+\s*\((.*?)\)\s*values/i);
+            if (columnsMatch && columnsMatch[1]) {
+              const columns = columnsMatch[1].split(',').map(col => col.trim());
+              
+              // Find the index of user_id column
+              const userIdColIndex = columns.findIndex(col => 
+                col.toLowerCase() === 'user_id' || 
+                col.toLowerCase().includes('"user_id"')
+              );
+              
+              if (userIdColIndex >= 0) {
+                request.log.info(`Found user_id at column index ${userIdColIndex}`);
+                
+                // Create a new query with explicit user ID instead of DEFAULT
+                modifiedParams = [...params];
+                modifiedParams.splice(userIdColIndex, 0, userId);
+                
+                // Generate new parameterized SQL with the user ID
+                let valuesPart = '(';
+                for (let j = 0; j < columns.length; j++) {
+                  if (j === userIdColIndex) {
+                    valuesPart += `$${j+1}`;
+                  } else {
+                    // Keep existing parameter reference or DEFAULT
+                    const paramMatch = sql.match(new RegExp(`\\$${j+1}`, 'g'));
+                    if (paramMatch) {
+                      valuesPart += `$${j+1}`;
+                    } else {
+                      valuesPart += 'DEFAULT';
+                    }
+                  }
+                  
+                  if (j < columns.length - 1) {
+                    valuesPart += ', ';
+                  }
+                }
+                valuesPart += ')';
+                
+                modifiedSql = `INSERT INTO ${sql.match(/insert\s+into\s+(\S+)/i)[1]} (${columns.join(', ')}) VALUES ${valuesPart}`;
+                if (hasReturning) {
+                  modifiedSql += ` ${sql.match(/returning\s+(.*)/i)[0]}`;
+                } else {
+                  modifiedSql += ' RETURNING *';
+                }
+                
+                request.log.info({
+                  originalSql: sql,
+                  modifiedSql,
+                  userId
+                }, `Reconstructed account query ${i} with user ID parameter`);
+              }
+            }
+          }
+        } else {
+          request.log.warn(`No user IDs available for account query ${i} - this will likely fail`);
         }
       }
       
-      if (isAccountInsert) {
-        request.log.info('Account creation detected in transaction');
+      // Execute the query with modified SQL and parameters
+      request.log.debug({
+        index: i,
+        sql: modifiedSql,
+        params: modifiedParams
+      }, 'Executing modified query');
+      
+      try {
+        const result = await client.query(modifiedSql, modifiedParams);
         
-        // Add RETURNING if needed for account creation
-        if (!hasReturning) {
-          request.log.info('Auto-adding RETURNING to account creation query');
-          modifiedSql = `${sql.trim()} RETURNING *`;
+        // Store results according to the specified method
+        if (method === 'single') {
+          results.push(result.rows[0] || null);
+        } else {
+          results.push(result.rows);
         }
         
-        // Check for DEFAULT in user_id which will cause foreign key constraint violation
-        if (sql.toLowerCase().includes('user_id') && sql.toLowerCase().includes('default')) {
-          request.log.warn('Account insert with DEFAULT for user_id detected - this will likely cause a constraint violation');
-          
-          // If we have user IDs from previous operations in this transaction, we could
-          // replace DEFAULT with an actual user ID
-          if (createdUserIds.length > 0) {
-            const userId = createdUserIds[0];
-            request.log.info(`Found user ID ${userId} from previous operation, attempting to fix account query`);
-            
-            // Replace DEFAULT with the actual user ID
-            // Note: This is a basic implementation and may not work for all SQL variations
-            modifiedSql = sql.replace(/\(\s*default\s*,/i, `('${userId}',`);
-            request.log.info(`Modified account query: ${modifiedSql}`);
+        // If this is a user insert, extract and store the user IDs for later account linking
+        if (isUserInsert && result.rows.length > 0) {
+          const newUserIds = result.rows.map(row => row.id).filter(Boolean);
+          if (newUserIds.length > 0) {
+            createdUserIds = [...newUserIds, ...createdUserIds]; // Add to the start for newest first
+            request.log.info({ userIds: newUserIds }, `Captured user IDs from query ${i}`);
           }
         }
-        
-        if (createdUserIds.length > 0) {
-          request.log.debug({ userIds: createdUserIds }, 'User IDs available for linking');
+      } catch (queryError) {
+        // If this is an account insert that failed due to user_id constraint
+        if (isAccountInsert && 
+            queryError.message.includes('violates not-null constraint') && 
+            queryError.message.includes('user_id')) {
+          
+          request.log.error({
+            error: queryError,
+            sql: modifiedSql
+          }, `Account insert failed at query ${i} - attempting to recover`);
+          
+          // Try again with a direct lookup for the most recent user
+          try {
+            const userLookup = await client.query(
+              "SELECT id FROM users ORDER BY created_at DESC LIMIT 1"
+            );
+            
+            if (userLookup.rows.length > 0) {
+              const userId = userLookup.rows[0].id;
+              request.log.info(`Found user ID ${userId} from database lookup`);
+              
+              // Replace DEFAULT with $1 and add the user ID as the first parameter
+              modifiedSql = modifiedSql.replace(/\(\s*default\s*,/i, `($1,`);
+              modifiedParams = [userId, ...params];
+              
+              // Try again with the fixed query
+              const recoveredResult = await client.query(modifiedSql, modifiedParams);
+              
+              if (method === 'single') {
+                results.push(recoveredResult.rows[0] || null);
+              } else {
+                results.push(recoveredResult.rows);
+              }
+              
+              request.log.info(`Successfully recovered from user_id constraint error in query ${i}`);
+            } else {
+              // If we can't find a user, we have to fail
+              throw queryError;
+            }
+          } catch (recoveryError) {
+            request.log.error({ error: recoveryError }, `Failed to recover from user_id error in query ${i}`);
+            throw recoveryError;
+          }
         } else {
-          request.log.warn('Account creation without prior user creation detected');
+          // For other errors, we propagate them
+          throw queryError;
         }
-      }
-      
-      // Execute the query with the potentially modified SQL
-      const result = await client.query(modifiedSql, params);
-      
-      // Handle different result methods
-      if (method === 'single') {
-        results.push(result.rows[0] || null);
-      } else {
-        results.push(result.rows);
-      }
-      
-      // Store user IDs from RETURNING clauses for Auth.js debugging
-      // This includes both original RETURNING clauses and our auto-added ones
-      if (isUserInsert && result.rows.length > 0) {
-        const userIds = result.rows.map(row => row.id).filter(Boolean);
-        createdUserIds = [...createdUserIds, ...userIds];
-        request.log.debug({ newUserIds: userIds }, 'User IDs from RETURNING clause');
       }
     }
 
     // Commit the transaction
     await client.query('COMMIT');
     
-    // Log summary for debugging
-    if (authJsOperationDetected) {
-      request.log.info({ 
-        success: true, 
-        queries: queries.length,
-        userIds: createdUserIds
-      }, 'Auth.js transaction completed');
-    }
+    // Log transaction summary
+    request.log.info({ 
+      success: true, 
+      queries: queries.length,
+      userIds: createdUserIds,
+      isAuthJs: isAuthJsTransaction || authJsUserInsertDetected
+    }, 'Transaction completed successfully');
 
     return results;
   } catch (error) {
     // Rollback in case of error
-    await client.query('ROLLBACK');
-    request.log.error({ error }, 'Transaction error');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      request.log.error({ error: rollbackError }, 'Error during transaction rollback');
+    }
+    
+    request.log.error({ error }, 'Transaction failed');
+    
+    // Enhanced error reporting for Auth.js
+    if (isAuthJsTransaction && error.message.includes('violates not-null constraint') && error.message.includes('user_id')) {
+      return reply.code(500).send({ 
+        error: error.message,
+        details: {
+          type: 'auth_js_error',
+          message: 'Auth.js account insert failed - missing user ID. Make sure users are created before accounts.',
+          recommendation: 'Check Auth.js adapter implementation or table schema.'
+        } 
+      });
+    }
+    
     return reply.code(500).send({ error: error.message });
   } finally {
     // Release the client back to the pool
