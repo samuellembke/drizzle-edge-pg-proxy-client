@@ -21,7 +21,7 @@ To run these examples:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/drizzle-edge-pg-proxy-client.git
+   git clone https://github.com/samuellembke/drizzle-edge-pg-proxy-client.git
    cd drizzle-edge-pg-proxy-client
    ```
 

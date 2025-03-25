@@ -1,8 +1,8 @@
 # Drizzle Edge PostgreSQL Proxy Client
 
 [![npm version](https://img.shields.io/npm/v/drizzle-edge-pg-proxy-client.svg)](https://www.npmjs.com/package/drizzle-edge-pg-proxy-client)
-[![Build Status](https://img.shields.io/github/workflow/status/yourusername/drizzle-edge-pg-proxy-client/CI)](https://github.com/yourusername/drizzle-edge-pg-proxy-client/actions)
-[![License](https://img.shields.io/npm/l/drizzle-edge-pg-proxy-client.svg)](https://github.com/yourusername/drizzle-edge-pg-proxy-client/blob/main/LICENSE)
+[![Build Status](https://img.shields.io/github/workflow/status/samuellembke/drizzle-edge-pg-proxy-client/CI)](https://github.com/samuellembke/drizzle-edge-pg-proxy-client/actions)
+[![License](https://img.shields.io/npm/l/drizzle-edge-pg-proxy-client.svg)](https://github.com/samuellembke/drizzle-edge-pg-proxy-client/blob/main/LICENSE)
 
 A client library for connecting to PostgreSQL databases from edge environments (Cloudflare Workers, Vercel Edge Functions, Deno Deploy, etc.) via an HTTP proxy. This package is compatible with [Drizzle ORM](https://orm.drizzle.team/) and designed to work in all environments that support the Fetch API.
 
@@ -280,17 +280,26 @@ We provide a high-performance PostgreSQL HTTP proxy implementation using Docker 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/drizzle-edge-pg-proxy-client.git
+git clone https://github.com/samuellembke/drizzle-edge-pg-proxy-client.git
 cd drizzle-edge-pg-proxy-client
 
 # Start the proxy and PostgreSQL database
-cd docker
 docker-compose up -d
 ```
 
 Now you can connect to your proxy at `http://localhost:8080` and start using it with the client.
 
 For more information, see the [Docker README](./docker/README.md).
+
+### Deployment
+
+This repository is configured for easy deployment with platforms like Coolify. The necessary Docker configuration files are located in the repository root:
+
+- `docker-compose.yml` - Docker Compose configuration
+- `Dockerfile` - Docker build instructions
+- `.env` - Environment variables (customize as needed)
+
+Just connect your repository to your deployment platform and the proxy server will be automatically built and deployed.
 
 ### Example Proxy Implementations
 
@@ -308,7 +317,7 @@ Check out the [examples directory](./examples) for more usage examples.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/drizzle-edge-pg-proxy-client.git
+git clone https://github.com/samuellembke/drizzle-edge-pg-proxy-client.git
 cd drizzle-edge-pg-proxy-client
 
 # Install dependencies
