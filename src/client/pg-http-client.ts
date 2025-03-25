@@ -1,7 +1,7 @@
 /**
  * Creates a custom HTTP client for PostgreSQL that works in edge environments
- * This implementation is designed to be compatible with Auth.js (NextAuth.js)
- * and follows a similar pattern to Neon's HTTP client.
+ * This implementation mirrors Neon's HTTP client interface to ensure compatibility
+ * with drizzle-orm and other tools that expect the Neon client.
  */
 
 // Define basic types based on Neon's HTTP client
@@ -101,169 +101,8 @@ export function createPgHttpClient({
     throw new Error('fetch is not available in the current environment. Please provide a fetch implementation.');
   }
 
-  // Store recently created user IDs for Auth.js account linking
-  const recentUserIds: string[] = [];
-
-  // Register a user ID (called when user creation queries return)
-  const registerUserId = (userId: string) => {
-    if (userId && !recentUserIds.includes(userId)) {
-      recentUserIds.unshift(userId); // Add to the front for newest first
-      // Keep the list manageable
-      if (recentUserIds.length > 10) recentUserIds.pop();
-    }
-  };
-
-  // Get the most recent user ID
-  const getRecentUserId = (): string | undefined => {
-    return recentUserIds.length > 0 ? recentUserIds[0] : undefined;
-  };
-
-  // Prepare query and handle special values like DEFAULT
-  const prepareQuery = (query: string, params: any[] = []): { query: string, params: any[] } => {
-    // Basic query type detection
-    const isInsert = query.trim().toUpperCase().startsWith('INSERT');
-    const hasReturning = query.toUpperCase().includes('RETURNING');
-    
-    // Auth.js table detection
-    const isUserTable = query.includes('_user') || query.includes(' user');
-    const isAccountTable = query.includes('_account') || query.includes(' account');
-    const isSessionTable = query.includes('_session') || query.includes(' session');
-    
-    const isAuthJsOperation = isInsert && (isUserTable || isAccountTable || isSessionTable);
-    
-    // Capture user IDs from user creation queries
-    if (isInsert && isUserTable && hasReturning) {
-      console.log('User creation query detected with RETURNING - will capture user ID');
-    }
-    
-    // Special handling for Auth.js account inserts with DEFAULT for user_id
-    if (isInsert && isAccountTable && 
-        query.toLowerCase().includes('user_id') && 
-        query.toLowerCase().includes('default')) {
-      
-      console.warn('Auth.js account insert with DEFAULT for user_id detected');
-      
-      // Check if we have a recent user ID we can use
-      const userId = getRecentUserId();
-      if (userId) {
-        console.log(`Using recent user ID: ${userId} for account linking`);
-        
-        // Try to replace DEFAULT with the user ID parameter
-        // This regex matches "default" preceded by optional whitespace and followed by a comma
-        // It's designed to match the first occurrence in VALUES clause
-        const defaultRegex = /\(\s*default\s*,/i;
-        if (defaultRegex.test(query)) {
-          // Replace DEFAULT with a parameter and add the user ID parameter
-          const modifiedQuery = query.replace(defaultRegex, `($${params.length + 1},`);
-          const modifiedParams = [...params, userId];
-          
-          console.log('Modified account query with user ID parameter');
-          
-          // Ensure RETURNING is present
-          if (!hasReturning) {
-            return {
-              query: `${modifiedQuery.trim()} RETURNING *`,
-              params: modifiedParams
-            };
-          }
-          
-          return {
-            query: modifiedQuery,
-            params: modifiedParams
-          };
-        }
-        
-        // If the regex replacement didn't work, try a more complex approach with column parsing
-        console.warn('Simple DEFAULT replacement failed, trying alternative approach');
-        
-        try {
-          // Extract column names from the query
-          const columnsMatch = query.match(/insert\s+into\s+\S+\s*\((.*?)\)\s*values/i);
-          if (columnsMatch && columnsMatch[1]) {
-            const columns = columnsMatch[1].split(',').map(col => col.trim());
-            
-            // Find user_id column index
-            const userIdColIndex = columns.findIndex(col => 
-              col.toLowerCase() === 'user_id' || 
-              col.toLowerCase().includes('"user_id"')
-            );
-            
-            if (userIdColIndex >= 0) {
-              console.log(`Found user_id at column index ${userIdColIndex}`);
-              
-              // Create new parameters array with the user ID inserted
-              const newParams = [...params];
-              
-              // Build new VALUES clause with the user ID parameter
-              let valuesPart = '(';
-              for (let i = 0; i < columns.length; i++) {
-                if (i === userIdColIndex) {
-                  // Add user ID parameter
-                  valuesPart += `$${newParams.length + 1}`;
-                  newParams.push(userId);
-                } else if (query.includes(`$${i+1}`)) {
-                  // Keep existing parameter reference
-                  valuesPart += `$${i+1}`;
-                } else {
-                  // Keep DEFAULT for other columns
-                  valuesPart += 'DEFAULT';
-                }
-                
-                if (i < columns.length - 1) {
-                  valuesPart += ', ';
-                }
-              }
-              valuesPart += ')';
-              
-              // Reconstruct the query
-              const tableMatch = query.match(/insert\s+into\s+(\S+)/i);
-              if (tableMatch && tableMatch[1]) {
-                let modifiedQuery = `INSERT INTO ${tableMatch[1]} (${columns.join(', ')}) VALUES ${valuesPart}`;
-                
-                // Add RETURNING if needed
-                if (hasReturning) {
-                  const returningMatch = query.match(/returning\s+(.*)/i);
-                  if (returningMatch && returningMatch[0]) {
-                    modifiedQuery += ` ${returningMatch[0]}`;
-                  }
-                } else {
-                  modifiedQuery += ' RETURNING *';
-                }
-                
-                console.log('Successfully reconstructed account query with user ID parameter');
-                
-                return {
-                  query: modifiedQuery,
-                  params: newParams
-                };
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Error trying to fix account query:', error);
-        }
-      } else {
-        console.warn('No recent user ID available for account linking');
-      }
-    }
-
-    // Auto-add RETURNING * for Auth.js operations if not present
-    if (isAuthJsOperation && !hasReturning) {
-      console.log('Auto-adding RETURNING * clause for Auth.js operation');
-      return { 
-        query: `${query.trim()} RETURNING *`, 
-        params 
-      };
-    }
-    
-    return { query, params };
-  };
-
   // Direct query execution function - the core of the client
   const execute = async (query: string, params: any[] = []): Promise<PgQueryResult> => {
-    // Prepare the query with special handling for Auth.js operations
-    const preparedQuery = prepareQuery(query, params);
-    
     const fetchOptions: RequestInit = {
       method: 'POST',
       headers: {
@@ -271,15 +110,9 @@ export function createPgHttpClient({
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify({
-        sql: preparedQuery.query,
-        params: preparedQuery.params,
+        sql: query,
+        params,
         method: 'all',
-        // Add context to help server identify Auth.js operations
-        context: {
-          isAuthJs: preparedQuery.query.includes('_account') || 
-                   preparedQuery.query.includes('_user') || 
-                   preparedQuery.query.includes('_session'),
-        }
       }),
     };
     
@@ -288,19 +121,12 @@ export function createPgHttpClient({
 
       if (!response.ok) {
         let errorMessage = '';
-        let errorDetails = {};
         
         try {
-          const errorData = await response.json() as { error?: string, details?: any };
+          const errorData = await response.json() as { error?: string };
           errorMessage = errorData.error || response.statusText;
-          errorDetails = errorData.details || {};
         } catch {
           errorMessage = `Status ${response.status}: ${response.statusText}`;
-        }
-        
-        // Enhance error for Auth.js operations
-        if (preparedQuery.query.includes('_account') && errorMessage.includes('violates not-null constraint')) {
-          console.error('Auth.js foreign key violation - check that users are created before accounts');
         }
         
         throw new Error(`PostgreSQL HTTP proxy error: ${errorMessage}`);
@@ -312,23 +138,9 @@ export function createPgHttpClient({
       
       // Determine command type from the query
       let command = 'SELECT';
-      if (preparedQuery.query.trim().toUpperCase().startsWith('INSERT')) command = 'INSERT';
-      else if (preparedQuery.query.trim().toUpperCase().startsWith('UPDATE')) command = 'UPDATE';
-      else if (preparedQuery.query.trim().toUpperCase().startsWith('DELETE')) command = 'DELETE';
-      
-      // Check for Auth.js user creation operations and capture user IDs
-      const isUserInsert = preparedQuery.query.trim().toUpperCase().startsWith('INSERT') &&
-        (preparedQuery.query.includes('_user') || preparedQuery.query.includes(' user'));
-      
-      if (isUserInsert && rows.length > 0) {
-        // Extract user IDs from user creation results
-        for (const row of rows) {
-          if (row.id) {
-            console.log(`Capturing user ID: ${row.id} from user insert result`);
-            registerUserId(row.id);
-          }
-        }
-      }
+      if (query.trim().toUpperCase().startsWith('INSERT')) command = 'INSERT';
+      else if (query.trim().toUpperCase().startsWith('UPDATE')) command = 'UPDATE';
+      else if (query.trim().toUpperCase().startsWith('DELETE')) command = 'DELETE';
       
       // Match Neon's result format, which is what drizzle-orm/neon-http expects
       return {
@@ -381,19 +193,15 @@ export function createPgHttpClient({
     return new QueryPromise(execute, { query, params });
   };
 
-  // Transaction handling - enhanced to better support Auth.js
+  // Transaction handling - simplified to match Neon's approach
   const transaction = async (queries: { text: string, values: unknown[] }[]): Promise<PgQueryResult[]> => {
     try {
-      // Prepare each query to handle Auth.js operations
-      const preparedQueries = queries.map(q => {
-        // Check each query for Auth.js operations
-        const prepared = prepareQuery(q.text, q.values as any[]);
-        return {
-          sql: prepared.query,
-          params: prepared.params,
-          method: 'all',
-        };
-      });
+      // Format queries for the transaction
+      const formattedQueries = queries.map(q => ({
+        sql: q.text,
+        params: q.values,
+        method: 'all',
+      }));
 
       // Send the transaction request
       const response = await fetchFn(`${formattedProxyUrl}/transaction`, {
@@ -403,13 +211,7 @@ export function createPgHttpClient({
           ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
         },
         body: JSON.stringify({
-          queries: preparedQueries,
-          // Add context to help server identify Auth.js transactions
-          context: {
-            isAuthJs: queries.some(q => 
-              q.text.includes('_user') || q.text.includes('_account') || q.text.includes('_session')
-            )
-          }
+          queries: formattedQueries
         }),
       });
 
@@ -430,25 +232,11 @@ export function createPgHttpClient({
       const formattedResults = Array.isArray(results) ? results.map((rows, i) => {
         // Determine the command type from the query
         let command = 'SELECT';
-        const query = preparedQueries[i]?.sql || '';
+        const query = formattedQueries[i]?.sql || '';
         
         if (query.trim().toUpperCase().startsWith('INSERT')) command = 'INSERT';
         else if (query.trim().toUpperCase().startsWith('UPDATE')) command = 'UPDATE';
         else if (query.trim().toUpperCase().startsWith('DELETE')) command = 'DELETE';
-        
-        // Check for user inserts and capture IDs for account linking
-        const isUserInsert = command === 'INSERT' &&
-          (query.includes('_user') || query.includes(' user'));
-        
-        if (isUserInsert && Array.isArray(rows) && rows.length > 0) {
-          // Extract user IDs from results
-          for (const row of rows) {
-            if (row.id) {
-              console.log(`Capturing user ID: ${row.id} from transaction user insert`);
-              registerUserId(row.id);
-            }
-          }
-        }
         
         return {
           command,
@@ -467,12 +255,11 @@ export function createPgHttpClient({
   };
 
   // Create a query function that directly executes SQL with parameters
-  // This is the critical method that Auth.js DrizzleAdapter calls directly
   const query = async (queryText: string, params: any[] = []): Promise<PgQueryResult> => {
     return execute(queryText, params);
   };
 
-  // Raw SQL support - used by drizzle and can be used by Auth.js
+  // Raw SQL support class
   class UnsafeRawSql {
     constructor(public sql: string) {}
   }
@@ -482,8 +269,8 @@ export function createPgHttpClient({
 
   // Return the client interface that matches Neon's
   return {
-    execute,      // Our internal method
-    query,        // Direct query method (used by Auth.js)
+    execute,      // Execute method
+    query,        // Direct query method
     sql,          // SQL template tag
     unsafe,       // For unsafe raw SQL
     transaction,  // For transactions
