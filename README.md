@@ -283,7 +283,8 @@ We provide a high-performance PostgreSQL HTTP proxy implementation using Docker 
 git clone https://github.com/samuellembke/drizzle-edge-pg-proxy-client.git
 cd drizzle-edge-pg-proxy-client
 
-# Start the proxy and PostgreSQL database
+# Configure your database connection in .env file
+# Start the proxy (connects to your external PostgreSQL database)
 docker-compose up -d
 ```
 
@@ -297,9 +298,17 @@ This repository is configured for easy deployment with platforms like Coolify. T
 
 - `docker-compose.yml` - Docker Compose configuration
 - `Dockerfile` - Docker build instructions
-- `.env` - Environment variables (customize as needed)
+- `.env.coolify` - Example environment variables for Coolify
 
-Just connect your repository to your deployment platform and the proxy server will be automatically built and deployed.
+#### Deploying to Coolify
+
+1. Connect your repository to Coolify
+2. Set up the required environment variables:
+   - `DATABASE_URL` - Connection string to your PostgreSQL database
+   - `AUTH_TOKEN` - (Optional) Secret token for proxy authentication
+3. Deploy the application
+
+**Important**: You must provide your own PostgreSQL database. The proxy service will connect to your existing database using the `DATABASE_URL` environment variable.
 
 ### Example Proxy Implementations
 

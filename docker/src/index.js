@@ -35,6 +35,12 @@ if (config.enableCompression) {
   await app.register(fastifyCompress);
 }
 
+// Check for database connection string
+if (!config.database.url) {
+  app.log.error('DATABASE_URL environment variable is not set. Please provide a PostgreSQL connection string.');
+  process.exit(1);
+}
+
 // Create PostgreSQL connection pool
 const pool = new Pool({
   connectionString: config.database.url,
@@ -46,7 +52,8 @@ const pool = new Pool({
 // Handle pool errors
 pool.on('error', (err) => {
   app.log.error('Unexpected error on idle client', err);
-  process.exit(-1);
+  app.log.error('Please check your DATABASE_URL environment variable.');
+  // Don't exit the process to allow for recovery
 });
 
 // Authentication hook
@@ -83,12 +90,26 @@ app.addHook('onRequest', async (request, reply) => {
 // Health check route
 app.get('/health', async () => {
   // Check if the database connection is healthy
-  const client = await pool.connect();
   try {
-    await client.query('SELECT 1');
-    return { status: 'ok' };
-  } finally {
-    client.release();
+    const client = await pool.connect();
+    try {
+      await client.query('SELECT 1');
+      return { 
+        status: 'ok',
+        database: 'connected'
+      };
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    app.log.warn('Database connection failed in health check:', error.message);
+    // Return a 200 status but indicate the database is not connected
+    // This allows the container to stay running even if the database is temporarily down
+    return { 
+      status: 'ok',
+      database: 'disconnected',
+      message: 'Application is running but database connection failed'
+    };
   }
 });
 

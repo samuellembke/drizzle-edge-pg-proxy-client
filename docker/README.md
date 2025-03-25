@@ -24,15 +24,21 @@ This directory contains a high-performance PostgreSQL HTTP proxy implementation 
 1. Create a `.env` file in the repository root with your configuration:
 
 ```env
+# Required: Your PostgreSQL connection string
+DATABASE_URL=postgres://username:password@your-postgres-host:5432/database
+
+# Optional: Authentication token for proxy security
 AUTH_TOKEN=your-secret-token
 ```
 
-2. Start the proxy and PostgreSQL database:
+2. Start the proxy:
 
 ```bash
 # From the repository root directory
 docker-compose up -d
 ```
+
+**Note**: You need to provide your own PostgreSQL database. The proxy does not include a database - it simply connects to your existing database.
 
 3. Use the client library to connect to your proxy:
 
