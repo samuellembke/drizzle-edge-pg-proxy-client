@@ -395,7 +395,7 @@ export function createPgHttpClient({
       },
       body: JSON.stringify({
         sql: query,
-        params: params.map(param => encodeBuffersAsBytea(param)),
+        params: Array.isArray(params) ? params.map(param => encodeBuffersAsBytea(param)) : [],
         method: 'all',
       }),
     };
@@ -531,12 +531,12 @@ export function createPgHttpClient({
     }
   ): Promise<PgQueryResult[]> => {
     try {
-      // Format queries for the transaction
-      const formattedQueries = queries.map(q => ({
-        sql: q.text,
-        params: q.values.map(value => encodeBuffersAsBytea(value)),
+      // Ensure queries is an array and format each query
+      const formattedQueries = Array.isArray(queries) ? queries.map(q => ({
+        sql: q.text || '',
+        params: Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [],
         method: 'all',
-      }));
+      })) : [];
 
       // Determine the array mode and full results settings
       const txnArrayMode = options?.arrayMode ?? arrayMode;
@@ -669,7 +669,7 @@ export function createPgHttpClient({
       headers,
       body: JSON.stringify({
         sql: queryText,
-        params: params.map(param => encodeBuffersAsBytea(param)),
+        params: Array.isArray(params) ? params.map(param => encodeBuffersAsBytea(param)) : [],
         method: 'all',
       }),
     };
