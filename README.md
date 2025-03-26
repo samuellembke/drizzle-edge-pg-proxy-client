@@ -490,14 +490,24 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.8 (Latest)
+### Version 0.2.9 (Latest)
 
-This version adds improved ID propagation in transactions:
+This version adds enhanced transaction handling with intelligent ID propagation:
+
+- ✅ **Generic ID Propagation**: Automatic detection and capture of all generated IDs from INSERT...RETURNING statements
+- ✅ **Smart DEFAULT Replacement**: Intelligent DEFAULT keyword substitution based on column names and relationships
+- ✅ **Pattern Recognition**: Auto-detects foreign key relationships through column naming patterns (e.g., table_id)
+- ✅ **Multiple ID Support**: Handles multiple generated IDs across complex multi-query transactions
+- ✅ **PostgreSQL Compatibility**: Maintains standard PostgreSQL behavior while adding convenience features
+
+### Version 0.2.8
+
+Previous version with basic ID propagation in transactions:
 
 - ✅ **Generated ID Extraction**: Added automatic ID extraction from INSERT queries with RETURNING
-- ✅ **Transaction Integration**: Properly propagates generated IDs between transaction steps
-- ✅ **DEFAULT Keyword Support**: Enhanced support for SQL's DEFAULT keyword with proper replacement
-- ✅ **Foreign Key Handling**: Intelligent handling of foreign key references in multi-step transactions
+- ✅ **Transaction Integration**: Propagates generated IDs between transaction steps
+- ✅ **DEFAULT Keyword Support**: Support for SQL's DEFAULT keyword replacement
+- ✅ **Foreign Key Handling**: Handling of foreign key references in multi-step transactions
 - ✅ **Debugging Support**: Added logging to aid in troubleshooting transaction issues
 
 ### Version 0.2.7

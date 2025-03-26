@@ -797,49 +797,81 @@ export function createPgHttpClient({
       }
       
       // Handle DEFAULT keyword replacement by transforming queries
-      // This improves compatibility with tools that rely on DEFAULT keyword and ID propagation
-      let generatedId: string | null = null;
+      // This improves compatibility with PostgreSQL and various ORMs
+      let generatedIds: Map<string, any> = new Map();
       
-      // Look for queries that might contain INSERT...RETURNING user ID
+      // First pass: mark all INSERT...RETURNING queries for ID capture
       for (let i = 0; i < queries.length; i++) {
         const queryText = queries[i]?.text || '';
         
-        // Check if this is a user insert query with RETURNING
+        // Check if this is an insert query with RETURNING clause (could generate IDs)
         if (queryText.toLowerCase().includes('insert into') && 
-            queryText.toLowerCase().includes('user') && 
             queryText.toLowerCase().includes('returning')) {
           
-          // Mark this query to capture its user ID result
-          // Using safe access with a fallback object for possibly undefined query
+          // Mark this query to capture any generated IDs from its result
           const currentQuery = queries[i] || { text: '', values: [] };
           queries[i] = {
             text: currentQuery.text || '',
             values: currentQuery.values || [],
             captureGeneratedId: true 
           };
-          break;
         }
       }
       
-      // Format each query, transforming as needed for Auth.js compatibility
+      // Format each query, transforming as needed for PostgreSQL compatibility
       const formattedQueries = queries.map((q, index) => {
         let sql = q.text || '';
         const params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
         
-        // Handle DEFAULT keyword replacement with actual generated ID (if we've captured it)
-        // This fixes the pattern where some ORMs use DEFAULT for foreign keys in related records
-        if (generatedId && 
+        // Handle DEFAULT keyword replacement with actual generated IDs
+        // This handles the pattern where ORMs use DEFAULT as placeholders for IDs from earlier queries
+        if (generatedIds.size > 0 && 
             sql.toLowerCase().includes('insert into') && 
-            sql.toLowerCase().includes('account') &&
-            sql.toLowerCase().includes('user_id') && 
             sql.toLowerCase().includes('default')) {
           
-          // Replace 'user_id', 'default') with 'user_id', $N)
-          // Use a regex to find and replace the pattern
-          if (sql.match(/user_id[^,]*,\s*default\)/i)) {
-            const paramIndex = params.length + 1;
-            sql = sql.replace(/user_id[^,]*,\s*default\)/i, `user_id", $${paramIndex})`);
-            params.push(generatedId);
+          // Generic DEFAULT keyword replacement in column values
+          // Look for pattern: "column_name", DEFAULT) or "column_name" DEFAULT,
+          const defaultPatterns = [
+            // Pattern: "column_name", DEFAULT)
+            /("([^"]+)"[^,]*,\s*DEFAULT\s*\))/gi,
+            // Pattern: "column_name" DEFAULT,
+            /("([^"]+)"[^,]*\s+DEFAULT\s*,)/gi
+          ];
+          
+          for (const pattern of defaultPatterns) {
+            sql = sql.replace(pattern, (match, fullMatch, columnName) => {
+              // Check if we have a generated ID that might be used for this column
+              // First look for exact column name match
+              if (generatedIds.has(columnName.toLowerCase())) {
+                const paramIndex = params.length + 1;
+                params.push(generatedIds.get(columnName.toLowerCase()));
+                
+                // Replace DEFAULT with parameter placeholder
+                if (match.endsWith(')')) {
+                  return `"${columnName}", $${paramIndex})`;
+                } else {
+                  return `"${columnName}" $${paramIndex},`;
+                }
+              }
+              
+              // If no exact match, try suffix match (e.g., user_id matching id)
+              for (const [key, value] of generatedIds.entries()) {
+                if (columnName.toLowerCase().endsWith('_' + key)) {
+                  const paramIndex = params.length + 1;
+                  params.push(value);
+                  
+                  // Replace DEFAULT with parameter placeholder
+                  if (match.endsWith(')')) {
+                    return `"${columnName}", $${paramIndex})`;
+                  } else {
+                    return `"${columnName}" $${paramIndex},`;
+                  }
+                }
+              }
+              
+              // If no match, leave it as is (use real database DEFAULT)
+              return match;
+            });
           }
         }
         
@@ -942,14 +974,26 @@ export function createPgHttpClient({
         // Process with type parsers
         const processed = processQueryResult(structuredResult, typeParser, txnArrayMode);
         
-        // Check if this is a user creation query and extract the user ID
-        // This is essential for Auth.js compatibility
+        // Check for any generated IDs in query results
         if (formattedQueries[i]?.captureGeneratedId && 
             processed.rows && 
-            processed.rows.length > 0 && 
-            processed.rows[0]?.id) {
-          generatedId = processed.rows[0].id;
-          console.log('Captured generated ID from query result:', generatedId);
+            processed.rows.length > 0) {
+          
+          // Capture all fields from the first row as potential IDs
+          const firstRow = processed.rows[0];
+          if (firstRow && typeof firstRow === 'object') {
+            for (const [key, value] of Object.entries(firstRow)) {
+              if (value !== null && value !== undefined) {
+                // Store under both the original key and lowercase for case-insensitive matching
+                generatedIds.set(key, value);
+                generatedIds.set(key.toLowerCase(), value);
+                // If key is 'id', log it as it's the most common primary key name
+                if (key.toLowerCase() === 'id') {
+                  console.log(`Captured generated ID from query result: ${key}=${value}`);
+                }
+              }
+            }
+          }
         }
         
         // Return the processed result or just the rows based on fullResults
