@@ -560,33 +560,33 @@ function processQueryResult(
   // Extract column names
   const colNames = fields.map((field: { name: string }) => field.name);
   
-      // Process rows with type parsers - with additional safety checks for Auth.js compatibility
-      let processedRows: any[] = [];
-      
-      if (Array.isArray(rowsData)) {
-        processedRows = arrayMode
-          ? rowsData.map((row: any) => {
-              // Ensure row is an array before trying to map over it
-              if (!Array.isArray(row)) {
-                return row; // Return as is if not an array
-              }
-              return row.map((val, i) => val === null ? null : parsers[i](val));
-            })
-          : rowsData.map((row: any) => {
-              // Handle cases where row might not be an array (Auth.js sometimes sends objects directly)
-              if (!Array.isArray(row)) {
-                return row; // Return as is if not an array
-              }
-              
-              const obj: Record<string, any> = {};
-              row.forEach((val, i) => {
-                if (i < colNames.length) { // Ensure index is within bounds
-                  obj[colNames[i]] = val === null ? null : parsers[i](val);
-                }
-              });
-              return obj;
-            });
-      }
+  // Process rows with type parsers - with additional safety checks for Auth.js compatibility
+  let processedRows: any[] = [];
+  
+  if (Array.isArray(rowsData)) {
+    processedRows = arrayMode
+      ? rowsData.map((row: any) => {
+          // Ensure row is an array before trying to map over it
+          if (!Array.isArray(row)) {
+            return row; // Return as is if not an array
+          }
+          return row.map((val, i) => val === null ? null : parsers[i](val));
+        })
+      : rowsData.map((row: any) => {
+          // Handle cases where row might not be an array (Auth.js sometimes sends objects directly)
+          if (!Array.isArray(row)) {
+            return row; // Return as is if not an array
+          }
+          
+          const obj: Record<string, any> = {};
+          row.forEach((val, i) => {
+            if (i < colNames.length) { // Ensure index is within bounds
+              obj[colNames[i]] = val === null ? null : parsers[i](val);
+            }
+          });
+          return obj;
+        });
+  }
   
   // Return a complete result object
   return {
@@ -612,6 +612,17 @@ export interface ClientOptions {
   arrayMode?: boolean;
   fullResults?: boolean;
   typeParser?: TypeParser | Record<number, (value: string) => any>;
+  sessionId?: string; // Optional explicit session ID, will be auto-generated if not provided
+}
+
+// Generate a UUID similar to what Neon uses for session IDs
+function generateUUID(): string {
+  // Simple UUID v4 implementation
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
 }
 
 export function createPgHttpClient({
@@ -621,6 +632,7 @@ export function createPgHttpClient({
   arrayMode = false,
   fullResults = false,
   typeParser: customTypeParser,
+  sessionId
 }: ClientOptions) {
   // Use provided fetch or global fetch
   const fetchFn = customFetch || globalThis.fetch;
@@ -632,6 +644,9 @@ export function createPgHttpClient({
   const typeParser = customTypeParser instanceof TypeParser 
     ? customTypeParser
     : new TypeParser(customTypeParser);
+    
+  // Create or use provided session ID - this matches Neon's implementation
+  const clientSessionId = sessionId || generateUUID();
   
   // Check if fetch is available in the current environment
   if (!fetchFn) {
@@ -647,6 +662,8 @@ export function createPgHttpClient({
         // Add Neon-specific headers for compatibility
         'Neon-Raw-Text-Output': 'true', 
         'Neon-Array-Mode': String(arrayMode),
+        // Add session ID header for consistent session tracking (just like Neon does)
+        'X-Session-ID': clientSessionId,
         // IMPORTANT: Always include Authorization header first if authToken is provided
         // to ensure compatibility with all server implementations
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
@@ -819,6 +836,8 @@ export function createPgHttpClient({
         // Add Neon-specific headers for compatibility
         'Neon-Raw-Text-Output': 'true',
         'Neon-Array-Mode': String(txnArrayMode),
+        // Add session ID header for consistent session tracking
+        'X-Session-ID': clientSessionId,
         // IMPORTANT: Always include Authorization header first if authToken is provided
         // to ensure compatibility with all server implementations
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
@@ -900,9 +919,6 @@ export function createPgHttpClient({
         // Process with type parsers
         const processed = processQueryResult(structuredResult, typeParser, txnArrayMode);
         
-        // No specific handling needed for returned values
-        // The proxy server now handles transaction context and DEFAULT substitution
-        
         // Return the processed result or just the rows based on fullResults
         return txnFullResults ? processed : processed.rows;
       }) : [];
@@ -944,6 +960,8 @@ export function createPgHttpClient({
         'Content-Type': 'application/json',
         'Neon-Raw-Text-Output': 'true',
         'Neon-Array-Mode': String(queryArrayMode),
+        // Add session ID header for consistent session tracking
+        'X-Session-ID': clientSessionId,
         // IMPORTANT: Always include Authorization header if authToken is provided
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
       };

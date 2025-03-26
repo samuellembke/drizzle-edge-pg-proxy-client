@@ -59,6 +59,7 @@ This document outlines the improvements needed to bring our `drizzle-edge-pg-pro
 - [ ] Support for connection health checks
 - [ ] Implement connection string validation and normalization
 - [ ] Add connection events (connected, disconnected, error)
+- [x] Add session ID tracking for persistent connections
 
 ## Result Handling
 
