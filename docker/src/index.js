@@ -32,9 +32,7 @@ const logLevel = process.env.LOG_LEVEL || 'info';
 const app = Fastify({
   logger: {
     level: logLevel,
-    // Add timestamp to logs
     timestamp: true,
-    // Optional: Customize log serialization for better readability of SQL queries
     serializers: {
       req: (req) => {
         return {
@@ -42,13 +40,11 @@ const app = Fastify({
           url: req.url,
           path: req.routerPath,
           parameters: req.params,
-          // Don't log headers or full body for security/privacy
         };
       }
     }
   },
   trustProxy: true,
-  // Increase the JSON body size limit if needed
   bodyLimit: 1048576, // 1MB
 });
 
@@ -75,7 +71,6 @@ const pool = new Pool({
 pool.on('error', (err) => {
   app.log.error('Unexpected error on idle client', err);
   app.log.error('Please check your DATABASE_URL environment variable.');
-  // Don't exit the process to allow for recovery
 });
 
 // Authentication hook
@@ -142,7 +137,6 @@ function getClientIdentifier(request) {
   }
   
   // Fallback to connection-based identification when no auth token
-  // This mimics how connection pooling works in database systems
   const clientIp = request.ip || request.headers['x-forwarded-for'] || 'unknown-ip';
   const userAgent = request.headers['user-agent'] || '';
   
@@ -196,8 +190,6 @@ app.get('/health', async () => {
     }
   } catch (error) {
     app.log.warn('Database connection failed in health check:', error.message);
-    // Return a 200 status but indicate the database is not connected
-    // This allows the container to stay running even if the database is temporarily down
     return { 
       status: 'ok',
       database: 'disconnected',
@@ -287,260 +279,17 @@ app.post('/query', async (request, reply) => {
   if (method !== 'all' && method !== 'single') {
     return reply.code(400).send({ error: 'Invalid method. Use "all" or "single".' });
   }
-  
-  // Check if this is a RETURNING query to track result values
-  const hasReturning = sql.toLowerCase().includes('returning');
-  
-  // Check for DEFAULT keywords that might need substitution from session context
-  if (sql.toLowerCase().includes('default')) {
-    app.log.info({ 
-      sql, 
-      params,
-      hasDefault: true,
-      lowercaseSql: sql.toLowerCase(), 
-      sqlType: sql.trim().split(' ')[0].toUpperCase(),
-      headers: request.headers,
-      sessionSize: session.returningValues.size
-    }, 'Processing query with DEFAULT keyword');
-    
-    // Get the table structure to understand required columns
-    try {
-      // Extract table name from INSERT statements
-      const tableNameMatch = sql.match(/into\s+"([^"]+)"/i);
-      if (tableNameMatch && tableNameMatch[1]) {
-        const tableName = tableNameMatch[1];
-        
-        // Get column information
-        const tableInfoQuery = `
-          SELECT 
-            column_name, 
-            column_default, 
-            is_nullable,
-            (SELECT kcu.table_name 
-             FROM information_schema.table_constraints tc
-             JOIN information_schema.key_column_usage kcu 
-               ON tc.constraint_catalog = kcu.constraint_catalog
-               AND tc.constraint_schema = kcu.constraint_schema
-               AND tc.constraint_name = kcu.constraint_name
-             WHERE tc.constraint_type = 'FOREIGN KEY'
-               AND tc.table_name = c.table_name
-               AND kcu.column_name = c.column_name
-             LIMIT 1) as referenced_table
-          FROM information_schema.columns c
-          WHERE table_name = $1
-          ORDER BY ordinal_position
-        `;
-        const columnInfo = await pool.query(tableInfoQuery, [tableName]);
-        app.log.info({ 
-          tableName, 
-          columns: columnInfo.rows 
-        }, 'Table structure info');
-        
-        // Look for columns with DEFAULT that should be substituted
-        // Specifically looking for Auth.js pattern: account table with user_id
-        const isAccountTable = tableName.toLowerCase().includes('account');
-        const userIdColumn = columnInfo.rows.find(col => 
-          col.column_name.toLowerCase() === 'user_id' || 
-          col.referenced_table?.toLowerCase()?.includes('user')
-        );
-        
-        // Special handling for Auth.js pattern. This is critical to get right!
-        if (isAccountTable && userIdColumn) {
-          app.log.info({
-            pattern: 'Auth.js account linking detected',
-            sessionSize: session.latestTableData.size,
-            userIdColumn: userIdColumn.column_name
-          }, 'Processing potential Auth.js pattern');
-          
-          // Look for any user tables that we've previously captured IDs from
-          let userId = null;
-          
-          // First check session for stored user IDs
-          for (const [tableName, values] of session.latestTableData.entries()) {
-            if (tableName.toLowerCase().includes('user') && values.has('id')) {
-              userId = values.get('id');
-              app.log.info({ 
-                userId, 
-                source: tableName 
-              }, 'Found user ID from previous request in session');
-              break;
-            }
-          }
-          
-          // If no user ID found in session but this is clearly an Auth.js account linking,
-          // query for the most recently created user as a fallback strategy
-          if (userId === null) {
-            try {
-              // Auth.js typically creates the user immediately before linking the account
-              // So query for the most recently created user as a fallback
-              const userLookupQuery = `
-                SELECT id FROM ${tableName.replace('account', 'user')} 
-                ORDER BY "createdAt" DESC LIMIT 1
-              `;
-              
-              app.log.info({ 
-                query: userLookupQuery
-              }, 'Looking up most recent user as fallback');
-              
-              const userResult = await pool.query(userLookupQuery);
-              if (userResult.rows && userResult.rows.length > 0 && userResult.rows[0].id) {
-                userId = userResult.rows[0].id;
-                app.log.info({ 
-                  userId, 
-                  source: 'database_lookup'
-                }, 'Found user ID from database lookup');
-                
-                // Add to session for future queries
-                if (!session.latestTableData.has('user')) {
-                  session.latestTableData.set('user', new Map());
-                }
-                session.latestTableData.get('user').set('id', userId);
-              }
-            } catch (lookupError) {
-              app.log.warn({ 
-                error: lookupError
-              }, 'Failed to look up most recent user');
-            }
-          }
-          
-          // If we found a user ID, replace DEFAULT in the SQL
-          if (userId !== null) {
-            const columnName = userIdColumn.column_name;
-            // Replace DEFAULT for user_id with parameter
-            // The SQL format can be either:
-            // 1. "user_id" in columns, default in values: ("user_id",...) values (default,...)
-            // 2. "user_id", DEFAULT in values list (older format): values (...,"user_id", DEFAULT,...)
-            
-            // Extract the column indices to find where user_id is in the values clause
-            const columnList = sql.match(/\(([^)]+)\)\s+values/i);
-            let isMatch = false;
-            let modifiedSql = sql;
-            
-            // Format 1: columns and values lists format
-            if (columnList && columnList[1].includes(`"${columnName}"`)) {
-              // Find the position of the column in the list
-              const columns = columnList[1].split(',').map(c => c.trim());
-              const columnIndex = columns.findIndex(c => c.includes(`"${columnName}"`));
-              
-              if (columnIndex >= 0) {
-                // Now find the values list
-                const valuesMatch = sql.match(/values\s*\(([^)]+)\)/i);
-                if (valuesMatch) {
-                  const values = valuesMatch[1].split(',').map(v => v.trim());
-                  
-                  // Check if the value at this index is DEFAULT
-                  if (columnIndex < values.length && values[columnIndex].toLowerCase() === 'default') {
-                    // We've found the DEFAULT for user_id, replace it
-                    const valueList = valuesMatch[1];
-                    const newValueList = valueList.split(',').map((v, i) => {
-                      if (i === columnIndex) {
-                        return ` $${params.length + 1}`;
-                      }
-                      return v;
-                    }).join(',');
-                    
-                    modifiedSql = sql.replace(valuesMatch[1], newValueList);
-                    isMatch = true;
-                    
-                    app.log.info({
-                      columnIndex,
-                      originalValues: valuesMatch[1],
-                      newValues: newValueList,
-                      userId
-                    }, 'Found and replaced DEFAULT in values list');
-                  }
-                }
-              }
-            }
-            
-            if (isMatch) {
-              // Clone params array for modification
-              const modifiedParams = [...params];
-              
-              // Add the user ID to params
-              modifiedParams.push(userId);
-              
-              app.log.info({
-                originalSql: sql,
-                modifiedSql,
-                modifiedParams,
-                userId
-              }, 'Substituted user ID for DEFAULT keyword');
-              
-              // Update the parameters for execution
-              sql = modifiedSql;
-              params = modifiedParams;
-            }
-          }
-        }
-      }
-    } catch (infoError) {
-      app.log.warn({ error: infoError }, 'Error fetching table structure');
-    }
-  }
 
   try {
-    // Execute the query with potentially modified SQL and parameters
+    // Execute the query
     const result = await pool.query(sql, params);
     
-    // Check if this is a RETURNING query and save values for future context
-    if (hasReturning && result.rows && result.rows.length > 0) {
-      try {
-        // Extract table name from query
-        let tableName = '';
-        const tableMatch = sql.match(/into\s+"([^"]+)"/i);
-        if (tableMatch && tableMatch[1]) {
-          tableName = tableMatch[1].toLowerCase();
-          
-          // Get the first row as the source of values
-          const row = result.rows[0];
-          
-          // Create table map if it doesn't exist
-          if (!session.latestTableData.has(tableName)) {
-            session.latestTableData.set(tableName, new Map());
-          }
-          
-          // Save all non-null values from the returned row
-          const tableData = session.latestTableData.get(tableName);
-          for (const [key, value] of Object.entries(row)) {
-            if (value !== null && value !== undefined) {
-              tableData.set(key.toLowerCase(), value);
-              
-              // Add to returningValues for compatibility checks - critically important!
-              // This fixes the check for session.returningValues.size > 0
-              session.returningValues.set(`${tableName}.${key.toLowerCase()}`, value);
-              
-              // Log important IDs with special detail
-              if (key.toLowerCase() === 'id') {
-                app.log.info({ 
-                  table: tableName, 
-                  id: value,
-                  mapSize: session.latestTableData.size,
-                  returningValuesSize: session.returningValues.size
-                }, 'Stored ID from RETURNING clause in session');
-              }
-            }
-          }
-          
-          // If this is a user table, explicitly log that we stored the user for later
-          if (tableName.toLowerCase().includes('user') && row.id) {
-            app.log.info({ 
-              userId: row.id,
-              clientId: getClientIdentifier(request).substring(0, 50) // Log part of client ID for debugging
-            }, 'Stored user ID in session for future account linking');
-          }
-        }
-      } catch (contextError) {
-        app.log.warn({ error: contextError }, 'Error storing result context');
-      }
-    }
+    // Log session info for debugging
+    app.log.debug({
+      sessionId: request.headers['x-session-id'],
+      clientId: getClientIdentifier(request)
+    }, 'Query with session information');
     
-    // Log results for debugging
-    request.log.debug({ 
-      rowCount: result.rowCount,
-      hasRows: result.rows.length > 0,
-    }, 'Query completed successfully');
-
     // Return the appropriate result based on the method and format
     if (rawTextOutput) {
       // Return formatted result like Neon does
@@ -560,12 +309,7 @@ app.post('/query', async (request, reply) => {
       error, 
       sql, 
       params,
-      errorCode: error.code,
-      errorTable: error.table,
-      errorConstraint: error.constraint,
-      errorDetail: error.detail,
-      errorRoutine: error.routine,
-      errorHint: error.hint
+      sessionId: request.headers['x-session-id']
     }, 'Database query error');
     
     // Format PostgreSQL error like Neon does
@@ -597,21 +341,8 @@ app.post('/transaction', async (request, reply) => {
     isolationLevel,
     readOnly,
     deferrable,
-    headers: request.headers,
-    queriesWithDefault: queries.filter(q => q.sql?.includes('default')).length
+    sessionId: request.headers['x-session-id']
   }, 'Starting transaction');
-
-  // Log queries containing DEFAULT for deeper analysis
-  queries.forEach((query, index) => {
-    if (query.sql?.includes('default')) {
-      app.log.info({
-        index,
-        sql: query.sql,
-        params: query.params,
-        method: query.method
-      }, 'Transaction query with DEFAULT keyword');
-    }
-  });
 
   // Get a client from the pool
   const client = await pool.connect();
@@ -639,186 +370,65 @@ app.post('/transaction', async (request, reply) => {
     app.log.info({ beginQuery }, 'Starting transaction with isolation level');
     await client.query(beginQuery);
 
-    // Execute all queries with transaction context awareness
+    // Execute all queries in the transaction
     const results = [];
-    
-    // Transaction context for tracking IDs and other values from RETURNING clauses
-    const txContext = {
-      // Store captured values by table and column
-      capturedValues: new Map(),
-      // Store ID mappings for foreign keys
-      foreignKeyValues: new Map()
-    };
     
     for (let i = 0; i < queries.length; i++) {
       const query = queries[i];
-      let { sql, params = [], method = 'all' } = query;
-      let modifiedParams = [...params]; // Clone params array for potential modification
+      const { sql, params = [], method = 'all' } = query;
       
-      // Detect if this query has a RETURNING clause (potential source of IDs)
-      const hasReturning = sql?.toLowerCase().includes('returning');
-      
-      // Analyze and process DEFAULT keywords in the current query
-      if (sql?.toLowerCase().includes('default') && txContext.capturedValues.size > 0) {
-        // Get the table structure to understand column relations
-        const tableNameMatch = sql.match(/into\s+"([^"]+)"/i);
-        if (tableNameMatch && tableNameMatch[1]) {
-          const tableName = tableNameMatch[1];
-          
-          try {
-            // Get column information for this table
-            const tableInfoQuery = `
-              SELECT 
-                column_name, 
-                column_default, 
-                is_nullable,
-                (SELECT kcu.table_name 
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu 
-                  ON tc.constraint_catalog = kcu.constraint_catalog
-                  AND tc.constraint_schema = kcu.constraint_schema
-                  AND tc.constraint_name = kcu.constraint_name
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND tc.table_name = c.table_name
-                  AND kcu.column_name = c.column_name
-                LIMIT 1) as referenced_table
-              FROM information_schema.columns c
-              WHERE table_name = $1
-              ORDER BY ordinal_position
-            `;
-            const columnInfo = await client.query(tableInfoQuery, [tableName]);
-            
-            app.log.info({ 
-              query: i,
-              tableName, 
-              columns: columnInfo.rows 
-            }, 'Table structure info for transaction query');
-            
-            // Auth.js-specific pattern detection: account table with user_id
-            const isAccountTable = tableName.toLowerCase().includes('account');
-            const userIdColumn = columnInfo.rows.find(col => 
-              col.column_name.toLowerCase() === 'user_id' || 
-              col.referenced_table?.toLowerCase()?.includes('user')
-            );
-            
-            if (isAccountTable && userIdColumn) {
-              app.log.info({
-                pattern: 'Auth.js account linking',
-                userIdColumn: userIdColumn.column_name,
-                referencedTable: userIdColumn.referenced_table
-              }, 'Detected Auth.js pattern');
-              
-              // Look for captured user IDs from previous queries
-              let userId = null;
-              
-              // First check for direct user table ID
-              for (const [table, columns] of txContext.capturedValues.entries()) {
-                if (table.toLowerCase().includes('user') && columns.has('id')) {
-                  userId = columns.get('id');
-                  break;
-                }
-              }
-              
-              // If we found a user ID, replace DEFAULT in the SQL for user_id
-              if (userId) {
-                app.log.info({
-                  userId,
-                  column: userIdColumn.column_name,
-                  originalSql: sql
-                }, 'Replacing DEFAULT with user ID in Auth.js pattern');
-                
-                // Use regex to replace DEFAULT in the user_id column
-                // This handles various SQL formats like:
-                // - "user_id", DEFAULT)
-                // - "user_id" DEFAULT,
-                const columnName = userIdColumn.column_name;
-                const pattern = new RegExp(`"${columnName}"[^,]*,\\s*DEFAULT\\s*[,)]`, 'i');
-                
-                if (pattern.test(sql)) {
-                  // Replace DEFAULT with parameter placeholder
-                  const paramIndex = modifiedParams.length + 1;
-                  sql = sql.replace(pattern, (match) => {
-                    return match.endsWith(')') 
-                      ? `"${columnName}", $${paramIndex})` 
-                      : `"${columnName}", $${paramIndex},`;
-                  });
-                  
-                  // Add the user ID to params
-                  modifiedParams.push(userId);
-                  
-                  app.log.info({
-                    modifiedSql: sql,
-                    modifiedParams,
-                    paramIndex: modifiedParams.length
-                  }, 'SQL modified with user ID parameter');
-                }
-              }
-            }
-            
-            // General case: Scan for any DEFAULT keywords where we have matching captured values
-            const defaultColumnPattern = /"([^"]+)"[^,]*,\s*DEFAULT\s*[,)]/gi;
-            let match;
-            let replacementsMade = false;
-            
-            while ((match = defaultColumnPattern.exec(sql)) !== null) {
-              const columnName = match[1].toLowerCase();
-              
-              // Find a suitable value from captured values (from any table)
-              let replacementValue = null;
-              let foundInTable = null;
-              
-              // First try exact column name match (e.g., id -> id)
-              for (const [table, columns] of txContext.capturedValues.entries()) {
-                if (columns.has(columnName)) {
-                  replacementValue = columns.get(columnName);
-                  foundInTable = table;
-                  break;
-                }
-                
-                // Then try foreign key pattern (e.g., user_id -> id in users table)
-                if (columnName.includes('_')) {
-                  const baseColumn = columnName.split('_').pop(); // Get last part after underscore
-                  if (baseColumn && table.toLowerCase().includes(columnName.split('_')[0]) && 
-                      columns.has(baseColumn)) {
-                    replacementValue = columns.get(baseColumn);
-                    foundInTable = table;
-                    break;
-                  }
-                }
-              }
-              
-              // If we found a value, replace DEFAULT in the SQL
-              if (replacementValue !== null) {
-                const paramIndex = modifiedParams.length + 1;
-                const originalMatch = match[0];
-                
-                // Replace DEFAULT with parameter placeholder
-                sql = sql.replace(originalMatch, (match) => {
-                  return match.endsWith(')') 
-                    ? `"${columnName}", $${paramIndex})` 
-                    : `"${columnName}", $${paramIndex},`;
-                });
-                
-                // Add the replacement value to params
-                modifiedParams.push(replacementValue);
-                
-                app.log.info({
-                  columnName,
-                  replacementValue,
-                  foundInTable,
-                  paramIndex
-                }, 'Replacing DEFAULT with captured value');
-                
-                replacementsMade = true;
-              }
-            }
-            
-            if (replacementsMade) {
-              app.log.info({
-                originalSql: query.sql,
-                modifiedSql: sql
-              }, 'SQL modified with replacements for DEFAULT keywords');
-            }
-            
-          } catch (infoError) {
-            app.log.warn({ error: infoError }, 'Error
+      try {
+        const result = await client.query(sql, params);
+        
+        // Format and add result to results array
+        const formattedResult = formatQueryResult(result, rawTextOutput);
+        formattedResult.rowAsArray = arrayMode;
+        results.push(method === 'single' && !rawTextOutput ? result.rows[0] || null : formattedResult);
+      } catch (error) {
+        // Rollback on any error
+        await client.query('ROLLBACK');
+        client.release();
+        
+        // Log error with session info
+        app.log.error({
+          error,
+          query: sql,
+          params,
+          sessionId: request.headers['x-session-id']
+        }, 'Transaction query error');
+        
+        return reply.code(400).send(formatPostgresError(error));
+      }
+    }
+    
+    // Commit transaction
+    await client.query('COMMIT');
+    
+    return results;
+  } catch (error) {
+    // Ensure transaction is rolled back on any error
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      app.log.error({ rollbackError }, 'Error during transaction rollback');
+    }
+    
+    return reply.code(400).send(formatPostgresError(error));
+  } finally {
+    // Always release the client back to the pool
+    client.release();
+  }
+});
+
+// Start the server
+const start = async () => {
+  try {
+    await app.listen({ port: config.port, host: config.host });
+    app.log.info(`Server listening on ${config.host}:${config.port}`);
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+};
+
+start();
