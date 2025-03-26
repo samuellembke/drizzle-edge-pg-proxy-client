@@ -490,19 +490,23 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.3.0 (Latest)
+### Version 0.3.1 (Latest)
 
-Major architectural update for transaction handling:
+Critical update: Implemented session context persistence across separate HTTP queries:
 
-- ✅ **Server-Side Transaction Context**: Moved transaction context handling from client to proxy server
-- ✅ **Enhanced Docker Proxy**: Updated proxy with intelligent DEFAULT keyword processing for Auth.js compatibility
-- ✅ **Neon-Aligned Architecture**: Matched Neon's architecture where the server handles transaction state
-- ✅ **Automatic Foreign Key Detection**: Server detects relationships between tables for proper ID propagation
-- ✅ **Full Auth.js Compatibility**: Complete compatibility with Auth.js transaction patterns
+- ✅ **Cross-Query Session Context**: Added client session tracking to maintain context between separate HTTP requests
+- ✅ **Auth.js Pattern Detection**: Specifically detects and handles Auth.js user creation + account linking pattern
+- ✅ **Perfect Neon Compatibility**: Mirrors Neon's architecture exactly by maintaining session state between queries
+- ✅ **DEFAULT Keyword Substitution**: Automatically replaces DEFAULT with appropriate values from session context
+- ✅ **Query Result Value Tracking**: Captures results from queries with RETURNING clauses for use in later requests
 
-This version represents a significant architectural shift. Instead of attempting to handle transaction context in the client, the proxy server now intelligently processes transaction batches, detects RETURNING values, and handles DEFAULT keyword substitution. This approach matches Neon's architecture and provides more robust transaction handling for all use cases.
+This version contains a significant architectural enhancement that makes our PostgreSQL HTTP proxy behave exactly like Neon's implementation. While version 0.3.0 improved transaction handling, this version adds crucial session context tracking between separate HTTP requests (not just within transactions), which is essential for Auth.js compatibility when it makes separate queries for user creation and account linking.
 
-> **Important**: To use this version, you must use our updated PostgreSQL HTTP proxy (v1.1.0+) that supports transaction context handling.
+> **Important**: To use this version, you must use our updated PostgreSQL HTTP proxy (v1.1.0+) that implements session context persistence.
+
+### Version 0.3.0
+
+Initial server-side transaction context implementation:
 
 ### Version 0.2.11
 

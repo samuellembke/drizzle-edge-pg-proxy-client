@@ -4,6 +4,9 @@ import fastifyCompress from '@fastify/compress';
 
 const { Pool } = pg;
 
+// Session storage to maintain context between requests (mimicking Neon's architecture)
+const sessionStorage = new Map();
+
 // Configuration
 const config = {
   port: process.env.PORT || 8080,
@@ -110,7 +113,7 @@ app.addHook('onRequest', async (request, reply) => {
 app.get('/', async () => {
   return {
     name: 'PostgreSQL HTTP Proxy',
-    version: '1.0.0',
+    version: '1.1.0',
     endpoints: [
       { path: '/query', method: 'POST', description: 'Execute SQL queries' },
       { path: '/transaction', method: 'POST', description: 'Execute transactions' },
@@ -119,6 +122,53 @@ app.get('/', async () => {
     documentation: 'https://github.com/samuellembke/drizzle-edge-pg-proxy-client'
   };
 });
+
+// Helper function to extract client identifier from request - used to maintain session state
+function getClientIdentifier(request) {
+  // Try to get auth token first as most reliable identifier
+  const authHeader = request.headers.authorization;
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  // Fall back to a combination of headers that should identify the client
+  if (token) return `auth_${token}`;
+  
+  // If no auth token, use a combination of headers
+  const userAgent = request.headers['user-agent'] || '';
+  const acceptLanguage = request.headers['accept-language'] || '';
+  const host = request.headers.host || '';
+  return `noauth_${host}_${userAgent.substring(0, 20)}_${acceptLanguage.substring(0, 10)}`;
+}
+
+// Helper to create or get a session for this client
+function getOrCreateSession(request) {
+  const clientId = getClientIdentifier(request);
+  if (!sessionStorage.has(clientId)) {
+    sessionStorage.set(clientId, {
+      lastActivity: Date.now(),
+      returningValues: new Map(), // Store values from RETURNING clauses
+      latestTableData: new Map()  // Store latest table data by table name
+    });
+  } else {
+    // Update last activity
+    const session = sessionStorage.get(clientId);
+    session.lastActivity = Date.now();
+  }
+  
+  return sessionStorage.get(clientId);
+}
+
+// Clean up old sessions periodically (every 5 minutes)
+setInterval(() => {
+  const now = Date.now();
+  const expiryTime = 30 * 60 * 1000; // 30 minutes
+  
+  for (const [clientId, session] of sessionStorage.entries()) {
+    if (now - session.lastActivity > expiryTime) {
+      sessionStorage.delete(clientId);
+      app.log.info({ clientId }, 'Session expired and removed');
+    }
+  }
+}, 5 * 60 * 1000);
 
 // Health check route
 app.get('/health', async () => {
@@ -212,7 +262,10 @@ function formatQueryResult(result, rawTextOutput = false) {
 
 // Query endpoint
 app.post('/query', async (request, reply) => {
-  const { sql, params = [], method = 'all' } = request.body;
+  // Get client session for context persistence (matching Neon's architecture)
+  const session = getOrCreateSession(request);
+  
+  let { sql, params = [], method = 'all' } = request.body;
   const rawTextOutput = request.headers['neon-raw-text-output'] === 'true';
   const arrayMode = request.headers['neon-array-mode'] === 'true';
 
@@ -225,27 +278,45 @@ app.post('/query', async (request, reply) => {
     return reply.code(400).send({ error: 'Invalid method. Use "all" or "single".' });
   }
   
-  // Enhanced detailed logging for query understanding
-  if (sql.includes('default')) {
+  // Check if this is a RETURNING query to track result values
+  const hasReturning = sql.toLowerCase().includes('returning');
+  
+  // Check for DEFAULT keywords that might need substitution from session context
+  if (sql.toLowerCase().includes('default')) {
     app.log.info({ 
       sql, 
       params,
       hasDefault: true,
       lowercaseSql: sql.toLowerCase(), 
       sqlType: sql.trim().split(' ')[0].toUpperCase(),
-      headers: request.headers
-    }, 'Executing query with DEFAULT keyword');
+      headers: request.headers,
+      sessionSize: session.returningValues.size
+    }, 'Processing query with DEFAULT keyword');
     
-    // Check table structure for columns with default values
+    // Get the table structure to understand required columns
     try {
-      // Get the table name from the SQL
+      // Extract table name from INSERT statements
       const tableNameMatch = sql.match(/into\s+"([^"]+)"/i);
       if (tableNameMatch && tableNameMatch[1]) {
         const tableName = tableNameMatch[1];
-        // Query column defaults
+        
+        // Get column information
         const tableInfoQuery = `
-          SELECT column_name, column_default, is_nullable 
-          FROM information_schema.columns 
+          SELECT 
+            column_name, 
+            column_default, 
+            is_nullable,
+            (SELECT kcu.table_name 
+             FROM information_schema.table_constraints tc
+             JOIN information_schema.key_column_usage kcu 
+               ON tc.constraint_catalog = kcu.constraint_catalog
+               AND tc.constraint_schema = kcu.constraint_schema
+               AND tc.constraint_name = kcu.constraint_name
+             WHERE tc.constraint_type = 'FOREIGN KEY'
+               AND tc.table_name = c.table_name
+               AND kcu.column_name = c.column_name
+             LIMIT 1) as referenced_table
+          FROM information_schema.columns c
           WHERE table_name = $1
           ORDER BY ordinal_position
         `;
@@ -254,6 +325,70 @@ app.post('/query', async (request, reply) => {
           tableName, 
           columns: columnInfo.rows 
         }, 'Table structure info');
+        
+        // Look for columns with DEFAULT that should be substituted
+        // Specifically looking for Auth.js pattern: account table with user_id
+        const isAccountTable = tableName.toLowerCase().includes('account');
+        const userIdColumn = columnInfo.rows.find(col => 
+          col.column_name.toLowerCase() === 'user_id' || 
+          col.referenced_table?.toLowerCase()?.includes('user')
+        );
+        
+        if (isAccountTable && userIdColumn && session.returningValues.size > 0) {
+          app.log.info({
+            pattern: 'Auth.js account linking',
+            userIdColumn: userIdColumn.column_name
+          }, 'Detected Auth.js pattern from session context');
+          
+          // Look for any user tables that we've previously captured IDs from
+          let userId = null;
+          
+          // First check session for stored user IDs
+          for (const [tableName, values] of session.latestTableData.entries()) {
+            if (tableName.toLowerCase().includes('user') && values.has('id')) {
+              userId = values.get('id');
+              app.log.info({ 
+                userId, 
+                source: tableName 
+              }, 'Found user ID from previous query');
+              break;
+            }
+          }
+          
+          // If we found a user ID, replace DEFAULT in the SQL
+          if (userId !== null) {
+            const columnName = userIdColumn.column_name;
+            // Replace DEFAULT for user_id with parameter
+            const pattern = new RegExp(`"${columnName}"[^,]*,\\s*DEFAULT\\s*[,)]`, 'i');
+            
+            if (pattern.test(sql)) {
+              // Clone params array for modification
+              const modifiedParams = [...params];
+              const paramIndex = modifiedParams.length + 1;
+              
+              // Update the SQL statement with the parameter placeholder
+              const newSql = sql.replace(pattern, (match) => {
+                return match.endsWith(')') 
+                  ? `"${columnName}", $${paramIndex})` 
+                  : `"${columnName}", $${paramIndex},`;
+              });
+              
+              // Add the user ID to params
+              modifiedParams.push(userId);
+              
+              app.log.info({
+                originalSql: sql,
+                modifiedSql: newSql,
+                modifiedParams,
+                userId
+              }, 'Substituted user ID for DEFAULT keyword');
+              
+              // Update the parameters for execution
+              sql = newSql;
+              params = modifiedParams;
+            }
+          }
+        }
       }
     } catch (infoError) {
       app.log.warn({ error: infoError }, 'Error fetching table structure');
@@ -261,8 +396,47 @@ app.post('/query', async (request, reply) => {
   }
 
   try {
-    // Execute the query
+    // Execute the query with potentially modified SQL and parameters
     const result = await pool.query(sql, params);
+    
+    // Check if this is a RETURNING query and save values for future context
+    if (hasReturning && result.rows && result.rows.length > 0) {
+      try {
+        // Extract table name from query
+        let tableName = '';
+        const tableMatch = sql.match(/into\s+"([^"]+)"/i);
+        if (tableMatch && tableMatch[1]) {
+          tableName = tableMatch[1].toLowerCase();
+          
+          // Get the first row as the source of values
+          const row = result.rows[0];
+          
+          // Create table map if it doesn't exist
+          if (!session.latestTableData.has(tableName)) {
+            session.latestTableData.set(tableName, new Map());
+          }
+          
+          // Save all non-null values from the returned row
+          const tableData = session.latestTableData.get(tableName);
+          for (const [key, value] of Object.entries(row)) {
+            if (value !== null && value !== undefined) {
+              tableData.set(key.toLowerCase(), value);
+              
+              // Special handling for primary keys
+              if (key.toLowerCase() === 'id') {
+                session.returningValues.set(`${tableName}.id`, value);
+                app.log.info({ 
+                  table: tableName, 
+                  id: value 
+                }, 'Stored ID from RETURNING clause in session context');
+              }
+            }
+          }
+        }
+      } catch (contextError) {
+        app.log.warn({ error: contextError }, 'Error storing result context');
+      }
+    }
     
     // Log results for debugging
     request.log.debug({ 
