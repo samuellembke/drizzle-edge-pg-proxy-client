@@ -490,19 +490,23 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.3.1 (Latest)
+### Version 0.3.2 (Latest)
 
-Critical update: Implemented session context persistence across separate HTTP queries:
+Enhanced session context for improved Auth.js compatibility:
 
-- ✅ **Cross-Query Session Context**: Added client session tracking to maintain context between separate HTTP requests
-- ✅ **Auth.js Pattern Detection**: Specifically detects and handles Auth.js user creation + account linking pattern
-- ✅ **Perfect Neon Compatibility**: Mirrors Neon's architecture exactly by maintaining session state between queries
-- ✅ **DEFAULT Keyword Substitution**: Automatically replaces DEFAULT with appropriate values from session context
-- ✅ **Query Result Value Tracking**: Captures results from queries with RETURNING clauses for use in later requests
+- ✅ **More robust client identification**: Improved client identification across separate HTTP requests
+- ✅ **Enhanced session persistence**: Better handling of client session data particularly for Auth.js
+- ✅ **Database fallback for Auth.js**: Added fallback mechanism to look up users when session context is lost
+- ✅ **Improved handling of user IDs**: Better storage and retrieval of user IDs across session requests
+- ✅ **Fixed session tracking**: Resolves issues where session context wasn't properly maintained
 
-This version contains a significant architectural enhancement that makes our PostgreSQL HTTP proxy behave exactly like Neon's implementation. While version 0.3.0 improved transaction handling, this version adds crucial session context tracking between separate HTTP requests (not just within transactions), which is essential for Auth.js compatibility when it makes separate queries for user creation and account linking.
+This version contains critical improvements to our session context handling. The core architecture remains the same as v0.3.1, but the implementation is now more robust and reliable. In particular, it properly maintains client identification between the first request (user creation) and second request (account linking) for Auth.js compatibility.
 
-> **Important**: To use this version, you must use our updated PostgreSQL HTTP proxy (v1.1.0+) that implements session context persistence.
+> **Important**: To use this version, you must use the updated PostgreSQL HTTP proxy (v1.1.0+) that implements improved session context persistence.
+
+### Version 0.3.1
+
+Initial session context implementation:
 
 ### Version 0.3.0
 

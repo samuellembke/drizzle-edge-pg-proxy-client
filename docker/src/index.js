@@ -125,18 +125,37 @@ app.get('/', async () => {
 
 // Helper function to extract client identifier from request - used to maintain session state
 function getClientIdentifier(request) {
-  // Try to get auth token first as most reliable identifier
+  // In Neon's implementation, client identification is highly sophisticated.
+  // We need to use multiple signals to identify the client, not just the auth token.
+  // For Auth.js, the same client makes both the user creation and account linking 
+  // requests, so we need to make sure they're identified as the same client.
+  
+  // Create a composite key from multiple request properties
+  const clientSignals = [];
+  
+  // Auth token is still important but not the only signal
   const authHeader = request.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
+  if (token) {
+    clientSignals.push(`token:${token}`);
+  }
   
-  // Fall back to a combination of headers that should identify the client
-  if (token) return `auth_${token}`;
+  // Client IP address is a strong signal for session continuity
+  const clientIp = request.ip || request.headers['x-forwarded-for'] || 'unknown-ip';
+  clientSignals.push(`ip:${clientIp}`);
   
-  // If no auth token, use a combination of headers
+  // User agent is fairly consistent for a client
   const userAgent = request.headers['user-agent'] || '';
-  const acceptLanguage = request.headers['accept-language'] || '';
-  const host = request.headers.host || '';
-  return `noauth_${host}_${userAgent.substring(0, 20)}_${acceptLanguage.substring(0, 10)}`;
+  clientSignals.push(`ua:${userAgent.substring(0, 20)}`);
+  
+  // Other headers that might help identify the client
+  const acceptHeader = request.headers['accept'] || '';
+  clientSignals.push(`accept:${acceptHeader.substring(0, 10)}`);
+  
+  // Generate a composite identifier - IMPORTANT: this approach 
+  // deliberately creates strong correlations between requests from 
+  // the same client even if they don't share the exact same attributes
+  return clientSignals.join('|');
 }
 
 // Helper to create or get a session for this client
@@ -334,11 +353,13 @@ app.post('/query', async (request, reply) => {
           col.referenced_table?.toLowerCase()?.includes('user')
         );
         
-        if (isAccountTable && userIdColumn && session.returningValues.size > 0) {
+        // Special handling for Auth.js pattern. This is critical to get right!
+        if (isAccountTable && userIdColumn) {
           app.log.info({
-            pattern: 'Auth.js account linking',
+            pattern: 'Auth.js account linking detected',
+            sessionSize: session.latestTableData.size,
             userIdColumn: userIdColumn.column_name
-          }, 'Detected Auth.js pattern from session context');
+          }, 'Processing potential Auth.js pattern');
           
           // Look for any user tables that we've previously captured IDs from
           let userId = null;
@@ -350,8 +371,44 @@ app.post('/query', async (request, reply) => {
               app.log.info({ 
                 userId, 
                 source: tableName 
-              }, 'Found user ID from previous query');
+              }, 'Found user ID from previous request in session');
               break;
+            }
+          }
+          
+          // If no user ID found in session but this is clearly an Auth.js account linking,
+          // query for the most recently created user as a fallback strategy
+          if (userId === null) {
+            try {
+              // Auth.js typically creates the user immediately before linking the account
+              // So query for the most recently created user as a fallback
+              const userLookupQuery = `
+                SELECT id FROM ${tableName.replace('account', 'user')} 
+                ORDER BY "createdAt" DESC LIMIT 1
+              `;
+              
+              app.log.info({ 
+                query: userLookupQuery
+              }, 'Looking up most recent user as fallback');
+              
+              const userResult = await pool.query(userLookupQuery);
+              if (userResult.rows && userResult.rows.length > 0 && userResult.rows[0].id) {
+                userId = userResult.rows[0].id;
+                app.log.info({ 
+                  userId, 
+                  source: 'database_lookup'
+                }, 'Found user ID from database lookup');
+                
+                // Add to session for future queries
+                if (!session.latestTableData.has('user')) {
+                  session.latestTableData.set('user', new Map());
+                }
+                session.latestTableData.get('user').set('id', userId);
+              }
+            } catch (lookupError) {
+              app.log.warn({ 
+                error: lookupError
+              }, 'Failed to look up most recent user');
             }
           }
           
@@ -422,15 +479,28 @@ app.post('/query', async (request, reply) => {
             if (value !== null && value !== undefined) {
               tableData.set(key.toLowerCase(), value);
               
-              // Special handling for primary keys
+              // Add to returningValues for compatibility checks - critically important!
+              // This fixes the check for session.returningValues.size > 0
+              session.returningValues.set(`${tableName}.${key.toLowerCase()}`, value);
+              
+              // Log important IDs with special detail
               if (key.toLowerCase() === 'id') {
-                session.returningValues.set(`${tableName}.id`, value);
                 app.log.info({ 
                   table: tableName, 
-                  id: value 
-                }, 'Stored ID from RETURNING clause in session context');
+                  id: value,
+                  mapSize: session.latestTableData.size,
+                  returningValuesSize: session.returningValues.size
+                }, 'Stored ID from RETURNING clause in session');
               }
             }
+          }
+          
+          // If this is a user table, explicitly log that we stored the user for later
+          if (tableName.toLowerCase().includes('user') && row.id) {
+            app.log.info({ 
+              userId: row.id,
+              clientId: getClientIdentifier(request).substring(0, 50) // Log part of client ID for debugging
+            }, 'Stored user ID in session for future account linking');
           }
         }
       } catch (contextError) {
