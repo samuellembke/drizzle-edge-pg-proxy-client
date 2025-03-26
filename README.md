@@ -490,15 +490,23 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.9 (Latest)
+### Version 0.2.10 (Latest)
 
-This version adds enhanced transaction handling with intelligent ID propagation:
+This version simplifies transaction handling to maximize PostgreSQL compatibility:
 
-- ✅ **Generic ID Propagation**: Automatic detection and capture of all generated IDs from INSERT...RETURNING statements
-- ✅ **Smart DEFAULT Replacement**: Intelligent DEFAULT keyword substitution based on column names and relationships
-- ✅ **Pattern Recognition**: Auto-detects foreign key relationships through column naming patterns (e.g., table_id)
-- ✅ **Multiple ID Support**: Handles multiple generated IDs across complex multi-query transactions
-- ✅ **PostgreSQL Compatibility**: Maintains standard PostgreSQL behavior while adding convenience features
+- ✅ **Native PostgreSQL Behavior**: Fully preserves PostgreSQL's standard behavior for DEFAULT keywords
+- ✅ **No Query Modifications**: Transmits SQL statements exactly as provided without client-side manipulation
+- ✅ **Consistent Execution**: Ensures queries execute exactly as they would with native PostgreSQL drivers
+- ✅ **Maximum Compatibility**: Works reliably with Auth.js, Drizzle, and other ORMs that rely on standard behavior
+- ✅ **Minimalist Approach**: Follows Neon's implementation strategy for maximum reliability
+
+### Version 0.2.9
+
+Added transaction enhancements that were later simplified:
+
+- ✅ **ID Capturing**: Automatic detection of generated IDs from INSERT...RETURNING statements
+- ✅ **DEFAULT Handling**: Added DEFAULT keyword handling for foreign key relationships
+- ✅ **Pattern Recognition**: Foreign key relationship detection through column naming patterns
 
 ### Version 0.2.8
 

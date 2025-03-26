@@ -796,84 +796,32 @@ export function createPgHttpClient({
         queries = [];
       }
       
-      // Handle DEFAULT keyword replacement by transforming queries
-      // This improves compatibility with PostgreSQL and various ORMs
-      let generatedIds: Map<string, any> = new Map();
+      // Simple metadata tracking for queries that might need special handling
+      let generatedIds = new Map<string, any>();
       
-      // First pass: mark all INSERT...RETURNING queries for ID capture
+      // First pass: just extract metadata from the queries
       for (let i = 0; i < queries.length; i++) {
+        // Get the query text safely with fallback to empty string
         const queryText = queries[i]?.text || '';
         
-        // Check if this is an insert query with RETURNING clause (could generate IDs)
+        // Mark INSERT...RETURNING queries for later ID capture - don't modify anything yet
         if (queryText.toLowerCase().includes('insert into') && 
             queryText.toLowerCase().includes('returning')) {
-          
-          // Mark this query to capture any generated IDs from its result
-          const currentQuery = queries[i] || { text: '', values: [] };
+          // Just mark this query for ID capture
           queries[i] = {
-            text: currentQuery.text || '',
-            values: currentQuery.values || [],
-            captureGeneratedId: true 
+            ...(queries[i] || { text: '', values: [] }),
+            captureGeneratedId: true
           };
         }
       }
       
-      // Format each query, transforming as needed for PostgreSQL compatibility
-      const formattedQueries = queries.map((q, index) => {
-        let sql = q.text || '';
+      // Format each query without modifying SQL - keep the query text exactly as provided
+      const formattedQueries = queries.map((q) => {
+        // Get text and values safely with fallbacks
+        const sql = q.text || '';
         const params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
         
-        // Handle DEFAULT keyword replacement with actual generated IDs
-        // This handles the pattern where ORMs use DEFAULT as placeholders for IDs from earlier queries
-        if (generatedIds.size > 0 && 
-            sql.toLowerCase().includes('insert into') && 
-            sql.toLowerCase().includes('default')) {
-          
-          // Generic DEFAULT keyword replacement in column values
-          // Look for pattern: "column_name", DEFAULT) or "column_name" DEFAULT,
-          const defaultPatterns = [
-            // Pattern: "column_name", DEFAULT)
-            /("([^"]+)"[^,]*,\s*DEFAULT\s*\))/gi,
-            // Pattern: "column_name" DEFAULT,
-            /("([^"]+)"[^,]*\s+DEFAULT\s*,)/gi
-          ];
-          
-          for (const pattern of defaultPatterns) {
-            sql = sql.replace(pattern, (match, fullMatch, columnName) => {
-              // Check if we have a generated ID that might be used for this column
-              // First look for exact column name match
-              if (generatedIds.has(columnName.toLowerCase())) {
-                const paramIndex = params.length + 1;
-                params.push(generatedIds.get(columnName.toLowerCase()));
-                
-                // Replace DEFAULT with parameter placeholder
-                if (match.endsWith(')')) {
-                  return `"${columnName}", $${paramIndex})`;
-                } else {
-                  return `"${columnName}" $${paramIndex},`;
-                }
-              }
-              
-              // If no exact match, try suffix match (e.g., user_id matching id)
-              for (const [key, value] of generatedIds.entries()) {
-                if (columnName.toLowerCase().endsWith('_' + key)) {
-                  const paramIndex = params.length + 1;
-                  params.push(value);
-                  
-                  // Replace DEFAULT with parameter placeholder
-                  if (match.endsWith(')')) {
-                    return `"${columnName}", $${paramIndex})`;
-                  } else {
-                    return `"${columnName}" $${paramIndex},`;
-                  }
-                }
-              }
-              
-              // If no match, leave it as is (use real database DEFAULT)
-              return match;
-            });
-          }
-        }
+        // Return unmodified query with parameters properly encoded
         
         return {
           sql,
