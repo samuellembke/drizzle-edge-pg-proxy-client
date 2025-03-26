@@ -6,6 +6,8 @@
 
 A client library for connecting to PostgreSQL databases from edge environments (Cloudflare Workers, Vercel Edge Functions, Deno Deploy, etc.) via an HTTP proxy. This package is compatible with [Drizzle ORM](https://orm.drizzle.team/) and designed to work in all environments that support the Fetch API.
 
+> CURRENTLY BROKEN
+
 ## 🌟 Features
 
 - 🚀 **Edge-Ready**: Works in all edge environments with fetch API support
