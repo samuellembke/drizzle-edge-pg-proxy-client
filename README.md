@@ -17,6 +17,8 @@ A client library for connecting to PostgreSQL databases from edge environments (
 - 📝 **TypeScript**: Full TypeScript support with proper type definitions
 - 🔄 **Transactions**: Support for running multiple queries in a transaction
 - 🧪 **Tested**: Comprehensive test suite for reliability
+- 📊 **Array Support**: Full PostgreSQL array parsing with element type awareness
+- 🔄 **Type System**: Comprehensive type system for PostgreSQL data types
 
 ## 📋 Table of Contents
 
@@ -488,7 +490,17 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.1 (Latest)
+### Version 0.2.6 (Latest)
+
+This version adds comprehensive array type parsing:
+
+- ✅ **PostgreSQL Array Support**: Added robust array parsing with element type awareness
+- ✅ **Multi-dimensional Arrays**: Support for nested arrays of any depth
+- ✅ **Type-Aware Parsing**: Each array element is converted to the appropriate JavaScript type
+- ✅ **Comprehensive Testing**: Added extensive tests for array parsing functionality
+- ✅ **Auth.js Compatibility**: Improved compatibility with Auth.js's array-based data models
+
+### Version 0.2.1
 
 This version adds comprehensive type system support:
 
