@@ -123,39 +123,29 @@ app.get('/', async () => {
   };
 });
 
-// Helper function to extract client identifier from request - used to maintain session state
+// Consistent with connection pooling approaches used by Neon and other database proxies
 function getClientIdentifier(request) {
-  // In Neon's implementation, client identification is highly sophisticated.
-  // We need to use multiple signals to identify the client, not just the auth token.
-  // For Auth.js, the same client makes both the user creation and account linking 
-  // requests, so we need to make sure they're identified as the same client.
-  
-  // Create a composite key from multiple request properties
-  const clientSignals = [];
-  
-  // Auth token is still important but not the only signal
+  // Primary connection identifier - authorization token as stable identifier
   const authHeader = request.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
-  if (token) {
-    clientSignals.push(`token:${token}`);
+  
+  // If client sends a session ID header (future improvement), use that
+  const sessionId = request.headers['x-session-id'];
+  if (sessionId) {
+    return `session:${sessionId}`;
   }
   
-  // Client IP address is a strong signal for session continuity
+  // Auth token is the most reliable identifier for requests from the same client
+  if (token) {
+    return `auth:${token}`;
+  }
+  
+  // Fallback to connection-based identification when no auth token
+  // This mimics how connection pooling works in database systems
   const clientIp = request.ip || request.headers['x-forwarded-for'] || 'unknown-ip';
-  clientSignals.push(`ip:${clientIp}`);
-  
-  // User agent is fairly consistent for a client
   const userAgent = request.headers['user-agent'] || '';
-  clientSignals.push(`ua:${userAgent.substring(0, 20)}`);
   
-  // Other headers that might help identify the client
-  const acceptHeader = request.headers['accept'] || '';
-  clientSignals.push(`accept:${acceptHeader.substring(0, 10)}`);
-  
-  // Generate a composite identifier - IMPORTANT: this approach 
-  // deliberately creates strong correlations between requests from 
-  // the same client even if they don't share the exact same attributes
-  return clientSignals.join('|');
+  return `conn:${clientIp}:${userAgent.substring(0, 30)}`;
 }
 
 // Helper to create or get a session for this client
