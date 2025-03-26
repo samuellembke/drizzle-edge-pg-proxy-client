@@ -102,7 +102,7 @@ app.addHook('preHandler', async (request, reply) => {
 app.addHook('onRequest', async (request, reply) => {
   reply.header('Access-Control-Allow-Origin', '*');
   reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Neon-Connection-String, Neon-Raw-Text-Output, Neon-Array-Mode, Neon-Batch-Isolation-Level, Neon-Batch-Read-Only, Neon-Batch-Deferrable');
+  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-ID, Neon-Connection-String, Neon-Raw-Text-Output, Neon-Array-Mode, Neon-Batch-Isolation-Level, Neon-Batch-Read-Only, Neon-Batch-Deferrable');
   
   if (request.method === 'OPTIONS') {
     reply.code(204).send();
@@ -129,7 +129,8 @@ function getClientIdentifier(request) {
   const authHeader = request.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
   
-  // If client sends a session ID header (future improvement), use that
+  // Primary identifier - use X-Session-ID header if provided
+  // This matches Neon's implementation which uses a UUID session ID
   const sessionId = request.headers['x-session-id'];
   if (sessionId) {
     return `session:${sessionId}`;
@@ -574,6 +575,9 @@ app.post('/query', async (request, reply) => {
 
 // Transaction endpoint
 app.post('/transaction', async (request, reply) => {
+  // Get client session for context persistence
+  const session = getOrCreateSession(request);
+  
   const { queries } = request.body;
   const rawTextOutput = request.headers['neon-raw-text-output'] === 'true';
   const arrayMode = request.headers['neon-array-mode'] === 'true';
@@ -791,8 +795,8 @@ app.post('/transaction', async (request, reply) => {
                 // Replace DEFAULT with parameter placeholder
                 sql = sql.replace(originalMatch, (match) => {
                   return match.endsWith(')') 
-                    ? `"${match[1]}", $${paramIndex})` 
-                    : `"${match[1]}", $${paramIndex},`;
+                    ? `"${columnName}", $${paramIndex})` 
+                    : `"${columnName}", $${paramIndex},`;
                 });
                 
                 // Add the replacement value to params
@@ -817,15 +821,4 @@ app.post('/transaction', async (request, reply) => {
             }
             
           } catch (infoError) {
-            app.log.warn({ error: infoError }, 'Error analyzing table structure in transaction');
-          }
-        }
-      }
-      
-      // Log each query in the transaction
-      app.log.info({ 
-        index: i, 
-        sql, 
-        params: modifiedParams, 
-        method,
-        hasReturning,
+            app.log.warn({ error: infoError }, 'Error
