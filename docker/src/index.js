@@ -406,32 +406,68 @@ app.post('/query', async (request, reply) => {
           if (userId !== null) {
             const columnName = userIdColumn.column_name;
             // Replace DEFAULT for user_id with parameter
-            const pattern = new RegExp(`"${columnName}"[^,]*,\\s*DEFAULT\\s*[,)]`, 'i');
+            // The SQL format can be either:
+            // 1. "user_id" in columns, default in values: ("user_id",...) values (default,...)
+            // 2. "user_id", DEFAULT in values list (older format): values (...,"user_id", DEFAULT,...)
             
-            if (pattern.test(sql)) {
+            // Extract the column indices to find where user_id is in the values clause
+            const columnList = sql.match(/\(([^)]+)\)\s+values/i);
+            let isMatch = false;
+            let modifiedSql = sql;
+            
+            // Format 1: columns and values lists format
+            if (columnList && columnList[1].includes(`"${columnName}"`)) {
+              // Find the position of the column in the list
+              const columns = columnList[1].split(',').map(c => c.trim());
+              const columnIndex = columns.findIndex(c => c.includes(`"${columnName}"`));
+              
+              if (columnIndex >= 0) {
+                // Now find the values list
+                const valuesMatch = sql.match(/values\s*\(([^)]+)\)/i);
+                if (valuesMatch) {
+                  const values = valuesMatch[1].split(',').map(v => v.trim());
+                  
+                  // Check if the value at this index is DEFAULT
+                  if (columnIndex < values.length && values[columnIndex].toLowerCase() === 'default') {
+                    // We've found the DEFAULT for user_id, replace it
+                    const valueList = valuesMatch[1];
+                    const newValueList = valueList.split(',').map((v, i) => {
+                      if (i === columnIndex) {
+                        return ` $${params.length + 1}`;
+                      }
+                      return v;
+                    }).join(',');
+                    
+                    modifiedSql = sql.replace(valuesMatch[1], newValueList);
+                    isMatch = true;
+                    
+                    app.log.info({
+                      columnIndex,
+                      originalValues: valuesMatch[1],
+                      newValues: newValueList,
+                      userId
+                    }, 'Found and replaced DEFAULT in values list');
+                  }
+                }
+              }
+            }
+            
+            if (isMatch) {
               // Clone params array for modification
               const modifiedParams = [...params];
-              const paramIndex = modifiedParams.length + 1;
-              
-              // Update the SQL statement with the parameter placeholder
-              const newSql = sql.replace(pattern, (match) => {
-                return match.endsWith(')') 
-                  ? `"${columnName}", $${paramIndex})` 
-                  : `"${columnName}", $${paramIndex},`;
-              });
               
               // Add the user ID to params
               modifiedParams.push(userId);
               
               app.log.info({
                 originalSql: sql,
-                modifiedSql: newSql,
+                modifiedSql,
                 modifiedParams,
                 userId
               }, 'Substituted user ID for DEFAULT keyword');
               
               // Update the parameters for execution
-              sql = newSql;
+              sql = modifiedSql;
               params = modifiedParams;
             }
           }
@@ -793,148 +829,3 @@ app.post('/transaction', async (request, reply) => {
         params: modifiedParams, 
         method,
         hasReturning,
-        hasDefault: sql?.toLowerCase().includes('default'),
-        modifiedFromOriginal: sql !== query.sql
-      }, 'Executing transaction query');
-      
-      try {
-        // Execute the query with potentially modified SQL and params
-        const result = await client.query(sql, modifiedParams);
-        
-        // If this query has RETURNING, capture returned values for subsequent queries
-        if (hasReturning && result.rows && result.rows.length > 0) {
-          // Extract table name from the query
-          let tableName = '';
-          const tableMatch = sql.match(/into\s+"([^"]+)"/i);
-          if (tableMatch && tableMatch[1]) {
-            tableName = tableMatch[1];
-          } else {
-            // Use a generic name if we can't extract the actual table name
-            tableName = `query_${i}`;
-          }
-          
-          // Get the first row as the source of values (typical for RETURNING clauses)
-          const row = result.rows[0];
-          
-          // Create a new column map for this table if it doesn't exist
-          if (!txContext.capturedValues.has(tableName)) {
-            txContext.capturedValues.set(tableName, new Map());
-          }
-          
-          // Store all non-null values from the result
-          const tableColumns = txContext.capturedValues.get(tableName);
-          for (const [key, value] of Object.entries(row)) {
-            if (value !== null && value !== undefined) {
-              tableColumns.set(key.toLowerCase(), value);
-              app.log.info({
-                table: tableName,
-                column: key,
-                value
-              }, 'Captured value from RETURNING clause');
-            }
-          }
-        }
-        
-        app.log.info({ 
-          index: i,
-          rowCount: result.rowCount,
-          hasRows: result.rows?.length > 0,
-          fieldCount: result.fields?.length,
-          commandStatus: result.command,
-          firstRowSample: result.rows?.[0] ? JSON.stringify(result.rows[0]).substring(0, 100) : null
-        }, 'Transaction query result');
-        
-        // Format the result
-        if (rawTextOutput) {
-          const formattedResult = formatQueryResult(result, rawTextOutput);
-          formattedResult.rowAsArray = arrayMode;
-          results.push(formattedResult);
-        } else {
-          // Store results according to the specified method
-          if (method === 'single') {
-            results.push(result.rows[0] || null);
-          } else {
-            results.push(result.rows);
-          }
-        }
-      } catch (queryError) {
-        // Log detailed query error but let the transaction handler catch and rollback
-        app.log.error({ 
-          index: i,
-          error: queryError,
-          errorCode: queryError.code,
-          errorDetail: queryError.detail,
-          sql, 
-          params
-        }, 'Transaction query failed');
-        
-        // Propagate the error to trigger rollback
-        throw queryError;
-      }
-    }
-
-    // Commit the transaction
-    await client.query('COMMIT');
-    
-    // Log transaction summary
-    app.log.info({ 
-      success: true, 
-      queryCount: queries.length,
-      resultCount: results.length
-    }, 'Transaction completed successfully');
-
-    // Return formatted response matching Neon's format
-    return { results };
-  } catch (error) {
-    // Rollback in case of error
-    try {
-      await client.query('ROLLBACK');
-      app.log.info('Transaction rolled back due to error');
-    } catch (rollbackError) {
-      app.log.error({ error: rollbackError }, 'Error during transaction rollback');
-    }
-    
-    // Detailed error logging
-    app.log.error({ 
-      error,
-      errorCode: error.code,
-      errorTable: error.table,
-      errorConstraint: error.constraint,
-      errorDetail: error.detail,
-      errorRoutine: error.routine,
-      errorHint: error.hint,
-      messageStr: error.message
-    }, 'Transaction failed');
-    
-    return reply.code(400).send(formatPostgresError(error));
-  } finally {
-    // Release the client back to the pool
-    client.release();
-  }
-});
-
-// Start the server
-const start = async () => {
-  try {
-    await app.listen({ port: config.port, host: config.host });
-    app.log.info(`Server listening on ${config.port}`);
-  } catch (err) {
-    app.log.error(err);
-    process.exit(1);
-  }
-};
-
-// Handle graceful shutdown
-const shutdown = async () => {
-  app.log.info('Shutting down server...');
-  await app.close();
-  await pool.end();
-  app.log.info('Server successfully shut down');
-  process.exit(0);
-};
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-// Start the server
-start();
