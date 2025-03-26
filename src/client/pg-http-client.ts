@@ -598,6 +598,13 @@ function processQueryResult(
   };
 }
 
+// Transaction query interface for Auth.js compatibility
+export interface TransactionQuery {
+  text: string;
+  values: unknown[];
+  captureUserId?: boolean;
+}
+
 export interface ClientOptions {
   proxyUrl: string;
   authToken?: string;
@@ -770,9 +777,11 @@ export function createPgHttpClient({
     return new QueryPromise(execute, parameterizedQuery);
   };
 
-  // Transaction handling with improved options support
+  // No need to redefine TransactionQuery here as it's already defined and exported
+  
+  // Transaction handling with improved options support and Auth.js compatibility
   const transaction = async (
-    queries: { text: string, values: unknown[] }[],
+    queries: TransactionQuery[],
     options?: {
       isolationLevel?: 'ReadUncommitted' | 'ReadCommitted' | 'RepeatableRead' | 'Serializable';
       readOnly?: boolean;
@@ -782,12 +791,65 @@ export function createPgHttpClient({
     }
   ): Promise<PgQueryResult[]> => {
     try {
-      // Ensure queries is an array and format each query
-      const formattedQueries = Array.isArray(queries) ? queries.map(q => ({
-        sql: q.text || '',
-        params: Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [],
-        method: 'all',
-      })) : [];
+      // Ensure queries is an array
+      if (!Array.isArray(queries)) {
+        queries = [];
+      }
+      
+      // Auth.js compatibility: Handle DEFAULT keyword for user_id by transforming the queries
+      // This is a critical fix for the Auth.js adapter which uses DEFAULT for user_id in account creation
+      let userId: string | null = null;
+      
+      // Look for queries that might contain INSERT...RETURNING user ID
+      for (let i = 0; i < queries.length; i++) {
+        const queryText = queries[i]?.text || '';
+        
+        // Check if this is a user insert query with RETURNING
+        if (queryText.toLowerCase().includes('insert into') && 
+            queryText.toLowerCase().includes('user') && 
+            queryText.toLowerCase().includes('returning')) {
+          
+          // Mark this query to capture its user ID result
+          // Using safe access with a fallback object for possibly undefined query
+          const currentQuery = queries[i] || { text: '', values: [] };
+          queries[i] = {
+            text: currentQuery.text || '',
+            values: currentQuery.values || [],
+            captureUserId: true 
+          };
+          break;
+        }
+      }
+      
+      // Format each query, transforming as needed for Auth.js compatibility
+      const formattedQueries = queries.map((q, index) => {
+        let sql = q.text || '';
+        const params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
+        
+        // Handle user_id DEFAULT replacement with actual userId (if we've captured it)
+        // This fixes the Auth.js pattern where it uses DEFAULT for user_id in account creation
+        if (userId && 
+            sql.toLowerCase().includes('insert into') && 
+            sql.toLowerCase().includes('account') &&
+            sql.toLowerCase().includes('user_id') && 
+            sql.toLowerCase().includes('default')) {
+          
+          // Replace 'user_id', 'default') with 'user_id', $N)
+          // Use a regex to find and replace the pattern
+          if (sql.match(/user_id[^,]*,\s*default\)/i)) {
+            const paramIndex = params.length + 1;
+            sql = sql.replace(/user_id[^,]*,\s*default\)/i, `user_id", $${paramIndex})`);
+            params.push(userId);
+          }
+        }
+        
+        return {
+          sql,
+          params,
+          method: 'all',
+          captureUserId: q.captureUserId
+        };
+      });
 
       // Determine the array mode and full results settings
       const txnArrayMode = options?.arrayMode ?? arrayMode;
@@ -879,6 +941,16 @@ export function createPgHttpClient({
         
         // Process with type parsers
         const processed = processQueryResult(structuredResult, typeParser, txnArrayMode);
+        
+        // Check if this is a user creation query and extract the user ID
+        // This is essential for Auth.js compatibility
+        if (formattedQueries[i]?.captureUserId && 
+            processed.rows && 
+            processed.rows.length > 0 && 
+            processed.rows[0]?.id) {
+          userId = processed.rows[0].id;
+          console.log('Captured user ID from query result:', userId);
+        }
         
         // Return the processed result or just the rows based on fullResults
         return txnFullResults ? processed : processed.rows;

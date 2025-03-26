@@ -490,9 +490,19 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.7 (Latest)
+### Version 0.2.8 (Latest)
 
-This version adds enhanced Auth.js compatibility:
+This version adds critical Auth.js fixes for user ID propagation:
+
+- ✅ **User ID Extraction**: Added automatic user ID extraction from INSERT queries with RETURNING
+- ✅ **Transaction Integration**: Properly propagates user IDs between transaction steps
+- ✅ **Auth.js Pattern Support**: Special handling for Auth.js's specific transaction patterns
+- ✅ **DEFAULT Replacement**: Automatically replaces DEFAULT placeholder with actual user IDs
+- ✅ **Debugging Support**: Added logging to aid in troubleshooting Auth.js issues
+
+### Version 0.2.7
+
+This version added enhanced Auth.js compatibility:
 
 - ✅ **Improved Array Handling**: Fixed `l.map is not a function` errors with safer array processing
 - ✅ **Robust Row Processing**: Added additional safety checks for Auth.js data structures
