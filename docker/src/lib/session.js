@@ -11,7 +11,7 @@ function getClientIdentifier(request) {
   if (sessionId) {
     return `session:${sessionId}`;
   }
-  
+
   // Auth token is still important but not the only signal
   const authHeader = request.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
@@ -21,10 +21,10 @@ function getClientIdentifier(request) {
 
   // Client IP address is a strong signal for session continuity
   const clientIp = request.ip || request.headers['x-forwarded-for'] || 'unknown-ip';
-  
+
   // User agent is fairly consistent for a client
   const userAgent = request.headers['user-agent'] || '';
-  
+
   // Fallback to connection-based identification when no auth token or session ID
   return `conn:${clientIp}:${userAgent.substring(0, 30)}`;
 }
@@ -53,11 +53,16 @@ function setupSessionCleanup(logger) {
     const now = Date.now();
     const expiryTime = 30 * 60 * 1000; // 30 minutes
 
+    let expiredCount = 0;
     for (const [clientId, session] of sessionStorage.entries()) {
       if (now - session.lastActivity > expiryTime) {
         sessionStorage.delete(clientId);
-        logger.info({ clientId }, 'Session expired and removed');
+        expiredCount++;
       }
+    }
+    
+    if (expiredCount > 0) {
+      logger.info({ expiredCount, remainingCount: sessionStorage.size }, 'Sessions expired and removed');
     }
   }, 5 * 60 * 1000);
 }

@@ -142,16 +142,22 @@ async function handleQuery(request, reply, pool, logger) {
           // If we found a user ID, replace DEFAULT in the SQL
           if (userId !== null) {
             const columnName = userIdColumn.column_name;
-            // Replace DEFAULT for user_id with parameter
-            const pattern = new RegExp(`"${columnName}"[^,]*,\s*DEFAULT\s*[,)]`, 'i');
+            // Find the column pattern and DEFAULT keyword
+            // This is the critical regular expression pattern that needs to be fixed
+            
+            // Match patterns like:
+            // 1. "user_id", DEFAULT
+            // 2. "user_id" default
+            // Both with potential trailing commas or parentheses
+            const columnPattern = new RegExp(`"${columnName}"[^,]*,\\s*DEFAULT\\s*[,)]`, 'i');
 
-            if (pattern.test(sql)) {
+            if (columnPattern.test(sql)) {
               // Clone params array for modification
               const modifiedParams = [...params];
               const paramIndex = modifiedParams.length + 1;
 
               // Update the SQL statement with the parameter placeholder
-              const newSql = sql.replace(pattern, (match) => {
+              const newSql = sql.replace(columnPattern, (match) => {
                 return match.endsWith(')') 
                   ? `"${columnName}", $${paramIndex})` 
                   : `"${columnName}", $${paramIndex},`;
@@ -171,6 +177,45 @@ async function handleQuery(request, reply, pool, logger) {
               // Update the parameters for execution
               sql = newSql;
               params = modifiedParams;
+            } else {
+              // Specific match for Auth.js pattern: values (default, ...
+              // This handles the case where user_id is the first param
+              const firstValuePattern = /values\s*\(\s*DEFAULT\s*,/i;
+              if (firstValuePattern.test(sql) && sql.toLowerCase().includes('"user_id"')) {
+                // Find the position of user_id in the columns list
+                const columnsMatch = sql.match(/\(([^)]+)\)\s+values/i);
+                if (columnsMatch) {
+                  const columns = columnsMatch[1].split(',').map(c => c.trim());
+                  const userIdPos = columns.findIndex(c => c.includes(`"${columnName}"`));
+                  
+                  if (userIdPos === 0) { // If user_id is the first column
+                    // Clone params array for modification
+                    const modifiedParams = [...params];
+                    const paramIndex = modifiedParams.length + 1;
+
+                    // Replace DEFAULT with parameter placeholder
+                    const newSql = sql.replace(
+                      firstValuePattern, 
+                      `values ($${paramIndex}, `
+                    );
+
+                    // Add the user ID to params
+                    modifiedParams.push(userId);
+
+                    logger.info({
+                      originalSql: sql,
+                      modifiedSql: newSql,
+                      modifiedParams,
+                      userId,
+                      sessionId: request.headers['x-session-id']
+                    }, 'Substituted user ID for DEFAULT in first position');
+
+                    // Update the parameters for execution
+                    sql = newSql;
+                    params = modifiedParams;
+                  }
+                }
+              }
             }
           }
         }
@@ -183,7 +228,7 @@ async function handleQuery(request, reply, pool, logger) {
   try {
     // Execute the query with potentially modified SQL and parameters
     const result = await pool.query(sql, params);
-
+    
     // Check if this is a RETURNING query and save values for future context
     if (hasReturning && result.rows && result.rows.length > 0) {
       try {
