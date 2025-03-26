@@ -490,15 +490,23 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.10 (Latest)
+### Version 0.2.11 (Latest)
 
-This version simplifies transaction handling to maximize PostgreSQL compatibility:
+This version adds specific Auth.js compatibility enhancements:
 
-- ✅ **Native PostgreSQL Behavior**: Fully preserves PostgreSQL's standard behavior for DEFAULT keywords
-- ✅ **No Query Modifications**: Transmits SQL statements exactly as provided without client-side manipulation
-- ✅ **Consistent Execution**: Ensures queries execute exactly as they would with native PostgreSQL drivers
-- ✅ **Maximum Compatibility**: Works reliably with Auth.js, Drizzle, and other ORMs that rely on standard behavior
-- ✅ **Minimalist Approach**: Follows Neon's implementation strategy for maximum reliability
+- ✅ **Auth.js Pattern Detection**: Automatically identifies Auth.js transaction patterns
+- ✅ **User ID Propagation**: Captures user ID from creation query and applies it to linked account queries
+- ✅ **Intelligent DEFAULT Handling**: Specifically targets Auth.js-related DEFAULT keyword usage
+- ✅ **Compatibility Bridge**: Maintains consistent behavior with Neon's adapter which Auth.js relies on
+- ✅ **Targeted Approach**: Optimizes for Auth.js use cases without impacting other PostgreSQL operations
+
+### Version 0.2.10
+
+Modified transaction handling with focus on standard behavior:
+
+- ✅ **Native PostgreSQL Approach**: Maintained standard PostgreSQL behavior for most DEFAULT keywords
+- ✅ **Query Preservation**: Transmitted SQL statements with minimal client-side manipulation
+- ✅ **Broad Compatibility**: Improved reliability across various ORM patterns
 
 ### Version 0.2.9
 

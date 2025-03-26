@@ -796,38 +796,44 @@ export function createPgHttpClient({
         queries = [];
       }
       
-      // Simple metadata tracking for queries that might need special handling
-      let generatedIds = new Map<string, any>();
+      // For transaction ID tracking between queries
+      let userId: string | null = null;
       
-      // First pass: just extract metadata from the queries
+      // Check for CreateUser + LinkAccount pattern (Auth.js)
+      let createUserIndex = -1;
+      let linkAccountIndex = -1;
+      
+      // Scan queries for the Auth.js pattern
       for (let i = 0; i < queries.length; i++) {
-        // Get the query text safely with fallback to empty string
-        const queryText = queries[i]?.text || '';
+        const queryText = (queries[i]?.text || '').toLowerCase();
         
-        // Mark INSERT...RETURNING queries for later ID capture - don't modify anything yet
-        if (queryText.toLowerCase().includes('insert into') && 
-            queryText.toLowerCase().includes('returning')) {
-          // Just mark this query for ID capture
-          queries[i] = {
-            ...(queries[i] || { text: '', values: [] }),
-            captureGeneratedId: true
-          };
+        // First query creates user and returns the ID
+        if (queryText.includes('insert into') && 
+            queryText.includes('user') && 
+            queryText.includes('returning')) {
+          createUserIndex = i;
+        }
+        
+        // Second query links account using the user_id with DEFAULT
+        if (queryText.includes('insert into') && 
+            queryText.includes('account') && 
+            queryText.includes('user_id') && 
+            queryText.includes('default')) {
+          linkAccountIndex = i;
         }
       }
       
-      // Format each query without modifying SQL - keep the query text exactly as provided
-      const formattedQueries = queries.map((q) => {
-        // Get text and values safely with fallbacks
-        const sql = q.text || '';
-        const params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
+      // Format queries for the server
+      const formattedQueries = queries.map((q, index) => {
+        let sql = q.text || '';
+        let params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
         
-        // Return unmodified query with parameters properly encoded
-        
+        // Format for server
         return {
           sql,
           params,
           method: 'all',
-          captureGeneratedId: q.captureGeneratedId
+          captureUserId: index === createUserIndex  // Track the create user query
         };
       });
 
@@ -922,24 +928,29 @@ export function createPgHttpClient({
         // Process with type parsers
         const processed = processQueryResult(structuredResult, typeParser, txnArrayMode);
         
-        // Check for any generated IDs in query results
-        if (formattedQueries[i]?.captureGeneratedId && 
+        // Look for user ID in create user query result
+        if (i === createUserIndex && 
             processed.rows && 
-            processed.rows.length > 0) {
+            processed.rows.length > 0 && 
+            processed.rows[0]?.id) {
           
-          // Capture all fields from the first row as potential IDs
-          const firstRow = processed.rows[0];
-          if (firstRow && typeof firstRow === 'object') {
-            for (const [key, value] of Object.entries(firstRow)) {
-              if (value !== null && value !== undefined) {
-                // Store under both the original key and lowercase for case-insensitive matching
-                generatedIds.set(key, value);
-                generatedIds.set(key.toLowerCase(), value);
-                // If key is 'id', log it as it's the most common primary key name
-                if (key.toLowerCase() === 'id') {
-                  console.log(`Captured generated ID from query result: ${key}=${value}`);
-                }
-              }
+          // Save the user ID for the next query
+          userId = processed.rows[0].id;
+          console.log('Captured user ID from first query:', userId);
+          
+          // Special handling for Auth.js: If the next query is a link account query
+          // Format the next query to properly set user_id parameter
+          if (userId && i+1 === linkAccountIndex && i+1 < formattedQueries.length) {
+            const nextQueryInfo = formattedQueries[i+1];
+            
+            // Fix the next query by replacing DEFAULT with real user_id
+            if (nextQueryInfo && nextQueryInfo.sql.toLowerCase().includes('default')) {
+              // Create a new modified SQL statement that will be used in the next iteration
+              formattedQueries[i+1] = {
+                ...nextQueryInfo,
+                sql: nextQueryInfo.sql.replace(/user_id[^,]*,\s*default/i, `user_id", $${nextQueryInfo.params.length + 1}`),
+                params: [...nextQueryInfo.params, userId]
+              };
             }
           }
         }
