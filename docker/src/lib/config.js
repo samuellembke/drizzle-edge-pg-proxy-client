@@ -8,13 +8,13 @@ const config = {
     pool: {
       min: parseInt(process.env.DB_POOL_MIN || '5', 10),
       max: parseInt(process.env.DB_POOL_MAX || '20', 10),
-      idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '10000', 10),
-    },
+      idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '10000', 10)
+    }
   },
   auth: {
-    token: process.env.AUTH_TOKEN,
+    token: process.env.AUTH_TOKEN
   },
-  enableCompression: process.env.ENABLE_COMPRESSION === 'true',
+  enableCompression: process.env.ENABLE_COMPRESSION === 'true'
 };
 
 // Logger configuration
