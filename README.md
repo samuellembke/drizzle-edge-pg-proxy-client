@@ -492,13 +492,13 @@ MIT
 
 ### Version 0.2.8 (Latest)
 
-This version adds critical Auth.js fixes for user ID propagation:
+This version adds improved ID propagation in transactions:
 
-- ✅ **User ID Extraction**: Added automatic user ID extraction from INSERT queries with RETURNING
-- ✅ **Transaction Integration**: Properly propagates user IDs between transaction steps
-- ✅ **Auth.js Pattern Support**: Special handling for Auth.js's specific transaction patterns
-- ✅ **DEFAULT Replacement**: Automatically replaces DEFAULT placeholder with actual user IDs
-- ✅ **Debugging Support**: Added logging to aid in troubleshooting Auth.js issues
+- ✅ **Generated ID Extraction**: Added automatic ID extraction from INSERT queries with RETURNING
+- ✅ **Transaction Integration**: Properly propagates generated IDs between transaction steps
+- ✅ **DEFAULT Keyword Support**: Enhanced support for SQL's DEFAULT keyword with proper replacement
+- ✅ **Foreign Key Handling**: Intelligent handling of foreign key references in multi-step transactions
+- ✅ **Debugging Support**: Added logging to aid in troubleshooting transaction issues
 
 ### Version 0.2.7
 

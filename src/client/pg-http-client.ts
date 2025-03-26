@@ -598,11 +598,11 @@ function processQueryResult(
   };
 }
 
-// Transaction query interface for Auth.js compatibility
+// Transaction query interface with support for query metadata
 export interface TransactionQuery {
   text: string;
   values: unknown[];
-  captureUserId?: boolean;
+  captureGeneratedId?: boolean; // Flag to indicate this query generates an ID that will be used in subsequent queries
 }
 
 export interface ClientOptions {
@@ -796,9 +796,9 @@ export function createPgHttpClient({
         queries = [];
       }
       
-      // Auth.js compatibility: Handle DEFAULT keyword for user_id by transforming the queries
-      // This is a critical fix for the Auth.js adapter which uses DEFAULT for user_id in account creation
-      let userId: string | null = null;
+      // Handle DEFAULT keyword replacement by transforming queries
+      // This improves compatibility with tools that rely on DEFAULT keyword and ID propagation
+      let generatedId: string | null = null;
       
       // Look for queries that might contain INSERT...RETURNING user ID
       for (let i = 0; i < queries.length; i++) {
@@ -815,7 +815,7 @@ export function createPgHttpClient({
           queries[i] = {
             text: currentQuery.text || '',
             values: currentQuery.values || [],
-            captureUserId: true 
+            captureGeneratedId: true 
           };
           break;
         }
@@ -826,9 +826,9 @@ export function createPgHttpClient({
         let sql = q.text || '';
         const params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
         
-        // Handle user_id DEFAULT replacement with actual userId (if we've captured it)
-        // This fixes the Auth.js pattern where it uses DEFAULT for user_id in account creation
-        if (userId && 
+        // Handle DEFAULT keyword replacement with actual generated ID (if we've captured it)
+        // This fixes the pattern where some ORMs use DEFAULT for foreign keys in related records
+        if (generatedId && 
             sql.toLowerCase().includes('insert into') && 
             sql.toLowerCase().includes('account') &&
             sql.toLowerCase().includes('user_id') && 
@@ -839,7 +839,7 @@ export function createPgHttpClient({
           if (sql.match(/user_id[^,]*,\s*default\)/i)) {
             const paramIndex = params.length + 1;
             sql = sql.replace(/user_id[^,]*,\s*default\)/i, `user_id", $${paramIndex})`);
-            params.push(userId);
+            params.push(generatedId);
           }
         }
         
@@ -847,7 +847,7 @@ export function createPgHttpClient({
           sql,
           params,
           method: 'all',
-          captureUserId: q.captureUserId
+          captureGeneratedId: q.captureGeneratedId
         };
       });
 
@@ -944,12 +944,12 @@ export function createPgHttpClient({
         
         // Check if this is a user creation query and extract the user ID
         // This is essential for Auth.js compatibility
-        if (formattedQueries[i]?.captureUserId && 
+        if (formattedQueries[i]?.captureGeneratedId && 
             processed.rows && 
             processed.rows.length > 0 && 
             processed.rows[0]?.id) {
-          userId = processed.rows[0].id;
-          console.log('Captured user ID from query result:', userId);
+          generatedId = processed.rows[0].id;
+          console.log('Captured generated ID from query result:', generatedId);
         }
         
         // Return the processed result or just the rows based on fullResults
