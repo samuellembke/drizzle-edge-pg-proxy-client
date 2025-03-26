@@ -490,15 +490,23 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.11 (Latest)
+### Version 0.3.0 (Latest)
 
-This version adds specific Auth.js compatibility enhancements:
+Major architectural update for transaction handling:
 
-- ✅ **Auth.js Pattern Detection**: Automatically identifies Auth.js transaction patterns
-- ✅ **User ID Propagation**: Captures user ID from creation query and applies it to linked account queries
-- ✅ **Intelligent DEFAULT Handling**: Specifically targets Auth.js-related DEFAULT keyword usage
-- ✅ **Compatibility Bridge**: Maintains consistent behavior with Neon's adapter which Auth.js relies on
-- ✅ **Targeted Approach**: Optimizes for Auth.js use cases without impacting other PostgreSQL operations
+- ✅ **Server-Side Transaction Context**: Moved transaction context handling from client to proxy server
+- ✅ **Enhanced Docker Proxy**: Updated proxy with intelligent DEFAULT keyword processing for Auth.js compatibility
+- ✅ **Neon-Aligned Architecture**: Matched Neon's architecture where the server handles transaction state
+- ✅ **Automatic Foreign Key Detection**: Server detects relationships between tables for proper ID propagation
+- ✅ **Full Auth.js Compatibility**: Complete compatibility with Auth.js transaction patterns
+
+This version represents a significant architectural shift. Instead of attempting to handle transaction context in the client, the proxy server now intelligently processes transaction batches, detects RETURNING values, and handles DEFAULT keyword substitution. This approach matches Neon's architecture and provides more robust transaction handling for all use cases.
+
+> **Important**: To use this version, you must use our updated PostgreSQL HTTP proxy (v1.1.0+) that supports transaction context handling.
+
+### Version 0.2.11
+
+Targeted Auth.js compatibility approach:
 
 ### Version 0.2.10
 

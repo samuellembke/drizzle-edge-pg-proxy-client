@@ -365,35 +365,189 @@ app.post('/transaction', async (request, reply) => {
     app.log.info({ beginQuery }, 'Starting transaction with isolation level');
     await client.query(beginQuery);
 
-    // Execute all queries
+    // Execute all queries with transaction context awareness
     const results = [];
+    
+    // Transaction context for tracking IDs and other values from RETURNING clauses
+    const txContext = {
+      // Store captured values by table and column
+      capturedValues: new Map(),
+      // Store ID mappings for foreign keys
+      foreignKeyValues: new Map()
+    };
     
     for (let i = 0; i < queries.length; i++) {
       const query = queries[i];
-      const { sql, params = [], method = 'all' } = query;
+      let { sql, params = [], method = 'all' } = query;
+      let modifiedParams = [...params]; // Clone params array for potential modification
       
-      // Check for DEFAULT keywords and log relevant table structure
-      if (sql?.includes('default')) {
-        // Extract table name from INSERT statements
+      // Detect if this query has a RETURNING clause (potential source of IDs)
+      const hasReturning = sql?.toLowerCase().includes('returning');
+      
+      // Analyze and process DEFAULT keywords in the current query
+      if (sql?.toLowerCase().includes('default') && txContext.capturedValues.size > 0) {
+        // Get the table structure to understand column relations
         const tableNameMatch = sql.match(/into\s+"([^"]+)"/i);
         if (tableNameMatch && tableNameMatch[1]) {
           const tableName = tableNameMatch[1];
+          
           try {
-            // Query column defaults
+            // Get column information for this table
             const tableInfoQuery = `
-              SELECT column_name, column_default, is_nullable 
-              FROM information_schema.columns 
+              SELECT 
+                column_name, 
+                column_default, 
+                is_nullable,
+                (SELECT kcu.table_name 
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu 
+                  ON tc.constraint_catalog = kcu.constraint_catalog
+                  AND tc.constraint_schema = kcu.constraint_schema
+                  AND tc.constraint_name = kcu.constraint_name
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_name = c.table_name
+                  AND kcu.column_name = c.column_name
+                LIMIT 1) as referenced_table
+              FROM information_schema.columns c
               WHERE table_name = $1
               ORDER BY ordinal_position
             `;
             const columnInfo = await client.query(tableInfoQuery, [tableName]);
+            
             app.log.info({ 
               query: i,
               tableName, 
               columns: columnInfo.rows 
             }, 'Table structure info for transaction query');
+            
+            // Auth.js-specific pattern detection: account table with user_id
+            const isAccountTable = tableName.toLowerCase().includes('account');
+            const userIdColumn = columnInfo.rows.find(col => 
+              col.column_name.toLowerCase() === 'user_id' || 
+              col.referenced_table?.toLowerCase()?.includes('user')
+            );
+            
+            if (isAccountTable && userIdColumn) {
+              app.log.info({
+                pattern: 'Auth.js account linking',
+                userIdColumn: userIdColumn.column_name,
+                referencedTable: userIdColumn.referenced_table
+              }, 'Detected Auth.js pattern');
+              
+              // Look for captured user IDs from previous queries
+              let userId = null;
+              
+              // First check for direct user table ID
+              for (const [table, columns] of txContext.capturedValues.entries()) {
+                if (table.toLowerCase().includes('user') && columns.has('id')) {
+                  userId = columns.get('id');
+                  break;
+                }
+              }
+              
+              // If we found a user ID, replace DEFAULT in the SQL for user_id
+              if (userId) {
+                app.log.info({
+                  userId,
+                  column: userIdColumn.column_name,
+                  originalSql: sql
+                }, 'Replacing DEFAULT with user ID in Auth.js pattern');
+                
+                // Use regex to replace DEFAULT in the user_id column
+                // This handles various SQL formats like:
+                // - "user_id", DEFAULT)
+                // - "user_id" DEFAULT,
+                const columnName = userIdColumn.column_name;
+                const pattern = new RegExp(`"${columnName}"[^,]*,\\s*DEFAULT\\s*[,)]`, 'i');
+                
+                if (pattern.test(sql)) {
+                  // Replace DEFAULT with parameter placeholder
+                  const paramIndex = modifiedParams.length + 1;
+                  sql = sql.replace(pattern, (match) => {
+                    return match.endsWith(')') 
+                      ? `"${columnName}", $${paramIndex})` 
+                      : `"${columnName}", $${paramIndex},`;
+                  });
+                  
+                  // Add the user ID to params
+                  modifiedParams.push(userId);
+                  
+                  app.log.info({
+                    modifiedSql: sql,
+                    modifiedParams,
+                    paramIndex: modifiedParams.length
+                  }, 'SQL modified with user ID parameter');
+                }
+              }
+            }
+            
+            // General case: Scan for any DEFAULT keywords where we have matching captured values
+            const defaultColumnPattern = /"([^"]+)"[^,]*,\s*DEFAULT\s*[,)]/gi;
+            let match;
+            let replacementsMade = false;
+            
+            while ((match = defaultColumnPattern.exec(sql)) !== null) {
+              const columnName = match[1].toLowerCase();
+              
+              // Find a suitable value from captured values (from any table)
+              let replacementValue = null;
+              let foundInTable = null;
+              
+              // First try exact column name match (e.g., id -> id)
+              for (const [table, columns] of txContext.capturedValues.entries()) {
+                if (columns.has(columnName)) {
+                  replacementValue = columns.get(columnName);
+                  foundInTable = table;
+                  break;
+                }
+                
+                // Then try foreign key pattern (e.g., user_id -> id in users table)
+                if (columnName.includes('_')) {
+                  const baseColumn = columnName.split('_').pop(); // Get last part after underscore
+                  if (baseColumn && table.toLowerCase().includes(columnName.split('_')[0]) && 
+                      columns.has(baseColumn)) {
+                    replacementValue = columns.get(baseColumn);
+                    foundInTable = table;
+                    break;
+                  }
+                }
+              }
+              
+              // If we found a value, replace DEFAULT in the SQL
+              if (replacementValue !== null) {
+                const paramIndex = modifiedParams.length + 1;
+                const originalMatch = match[0];
+                
+                // Replace DEFAULT with parameter placeholder
+                sql = sql.replace(originalMatch, (match) => {
+                  return match.endsWith(')') 
+                    ? `"${match[1]}", $${paramIndex})` 
+                    : `"${match[1]}", $${paramIndex},`;
+                });
+                
+                // Add the replacement value to params
+                modifiedParams.push(replacementValue);
+                
+                app.log.info({
+                  columnName,
+                  replacementValue,
+                  foundInTable,
+                  paramIndex
+                }, 'Replacing DEFAULT with captured value');
+                
+                replacementsMade = true;
+              }
+            }
+            
+            if (replacementsMade) {
+              app.log.info({
+                originalSql: query.sql,
+                modifiedSql: sql
+              }, 'SQL modified with replacements for DEFAULT keywords');
+            }
+            
           } catch (infoError) {
-            app.log.warn({ error: infoError }, 'Error fetching table structure in transaction');
+            app.log.warn({ error: infoError }, 'Error analyzing table structure in transaction');
           }
         }
       }
@@ -402,14 +556,50 @@ app.post('/transaction', async (request, reply) => {
       app.log.info({ 
         index: i, 
         sql, 
-        params, 
+        params: modifiedParams, 
         method,
-        containsDefault: sql?.includes('default')
+        hasReturning,
+        hasDefault: sql?.toLowerCase().includes('default'),
+        modifiedFromOriginal: sql !== query.sql
       }, 'Executing transaction query');
       
       try {
-        // Execute the query
-        const result = await client.query(sql, params);
+        // Execute the query with potentially modified SQL and params
+        const result = await client.query(sql, modifiedParams);
+        
+        // If this query has RETURNING, capture returned values for subsequent queries
+        if (hasReturning && result.rows && result.rows.length > 0) {
+          // Extract table name from the query
+          let tableName = '';
+          const tableMatch = sql.match(/into\s+"([^"]+)"/i);
+          if (tableMatch && tableMatch[1]) {
+            tableName = tableMatch[1];
+          } else {
+            // Use a generic name if we can't extract the actual table name
+            tableName = `query_${i}`;
+          }
+          
+          // Get the first row as the source of values (typical for RETURNING clauses)
+          const row = result.rows[0];
+          
+          // Create a new column map for this table if it doesn't exist
+          if (!txContext.capturedValues.has(tableName)) {
+            txContext.capturedValues.set(tableName, new Map());
+          }
+          
+          // Store all non-null values from the result
+          const tableColumns = txContext.capturedValues.get(tableName);
+          for (const [key, value] of Object.entries(row)) {
+            if (value !== null && value !== undefined) {
+              tableColumns.set(key.toLowerCase(), value);
+              app.log.info({
+                table: tableName,
+                column: key,
+                value
+              }, 'Captured value from RETURNING clause');
+            }
+          }
+        }
         
         app.log.info({ 
           index: i,

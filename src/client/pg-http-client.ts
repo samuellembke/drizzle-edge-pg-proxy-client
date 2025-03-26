@@ -796,44 +796,16 @@ export function createPgHttpClient({
         queries = [];
       }
       
-      // For transaction ID tracking between queries
-      let userId: string | null = null;
-      
-      // Check for CreateUser + LinkAccount pattern (Auth.js)
-      let createUserIndex = -1;
-      let linkAccountIndex = -1;
-      
-      // Scan queries for the Auth.js pattern
-      for (let i = 0; i < queries.length; i++) {
-        const queryText = (queries[i]?.text || '').toLowerCase();
+      // Format queries for the server - simple pass-through without modification
+      // Transaction ID propagation is now handled entirely by the proxy server
+      const formattedQueries = queries.map((q) => {
+        const sql = q.text || '';
+        const params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
         
-        // First query creates user and returns the ID
-        if (queryText.includes('insert into') && 
-            queryText.includes('user') && 
-            queryText.includes('returning')) {
-          createUserIndex = i;
-        }
-        
-        // Second query links account using the user_id with DEFAULT
-        if (queryText.includes('insert into') && 
-            queryText.includes('account') && 
-            queryText.includes('user_id') && 
-            queryText.includes('default')) {
-          linkAccountIndex = i;
-        }
-      }
-      
-      // Format queries for the server
-      const formattedQueries = queries.map((q, index) => {
-        let sql = q.text || '';
-        let params = Array.isArray(q.values) ? q.values.map(value => encodeBuffersAsBytea(value)) : [];
-        
-        // Format for server
         return {
           sql,
           params,
-          method: 'all',
-          captureUserId: index === createUserIndex  // Track the create user query
+          method: 'all'
         };
       });
 
@@ -928,32 +900,8 @@ export function createPgHttpClient({
         // Process with type parsers
         const processed = processQueryResult(structuredResult, typeParser, txnArrayMode);
         
-        // Look for user ID in create user query result
-        if (i === createUserIndex && 
-            processed.rows && 
-            processed.rows.length > 0 && 
-            processed.rows[0]?.id) {
-          
-          // Save the user ID for the next query
-          userId = processed.rows[0].id;
-          console.log('Captured user ID from first query:', userId);
-          
-          // Special handling for Auth.js: If the next query is a link account query
-          // Format the next query to properly set user_id parameter
-          if (userId && i+1 === linkAccountIndex && i+1 < formattedQueries.length) {
-            const nextQueryInfo = formattedQueries[i+1];
-            
-            // Fix the next query by replacing DEFAULT with real user_id
-            if (nextQueryInfo && nextQueryInfo.sql.toLowerCase().includes('default')) {
-              // Create a new modified SQL statement that will be used in the next iteration
-              formattedQueries[i+1] = {
-                ...nextQueryInfo,
-                sql: nextQueryInfo.sql.replace(/user_id[^,]*,\s*default/i, `user_id", $${nextQueryInfo.params.length + 1}`),
-                params: [...nextQueryInfo.params, userId]
-              };
-            }
-          }
-        }
+        // No specific handling needed for returned values
+        // The proxy server now handles transaction context and DEFAULT substitution
         
         // Return the processed result or just the rows based on fullResults
         return txnFullResults ? processed : processed.rows;
