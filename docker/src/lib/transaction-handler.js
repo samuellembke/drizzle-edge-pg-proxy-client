@@ -1,4 +1,4 @@
-// Transaction handling for the PostgreSQL HTTP proxy server - generic implementation
+// Transaction handling for the PostgreSQL HTTP proxy server
 
 const { formatQueryResult, formatPostgresError } = require('./utils');
 
@@ -34,11 +34,6 @@ async function handleTransaction(request, reply, pool, logger) {
   // Get a client from the pool
   const client = await pool.connect();
   
-  // Define transaction context for tracking values between steps
-  const txContext = {
-    capturedValues: new Map() // Store values captured from RETURNING clauses within this transaction
-  };
-
   // Define transaction results array
   const results = [];
 
@@ -69,7 +64,7 @@ async function handleTransaction(request, reply, pool, logger) {
       // Detect if this query has a RETURNING clause (potential source of values)
       const hasReturning = sql?.toLowerCase().includes('returning');
 
-      // Execute the query
+      // Execute the query exactly as received
       logger.debug({
         sql,
         params,
@@ -94,11 +89,8 @@ async function handleTransaction(request, reply, pool, logger) {
             if (value !== null && value !== undefined) {
               const columnKey = `${tableName}.${key.toLowerCase()}`;
               
-              // Store in both transaction context and session
+              // Store in session
               session.returningValues.set(columnKey, value);
-              
-              // Also track within this transaction
-              txContext.capturedValues.set(columnKey, value);
               
               // Log important values for debugging
               if (key.toLowerCase() === 'id') {
@@ -125,7 +117,6 @@ async function handleTransaction(request, reply, pool, logger) {
     
     logger.debug({
       resultsCount: results.length,
-      capturedValues: txContext.capturedValues.size,
       sessionId
     }, 'Transaction committed successfully');
 

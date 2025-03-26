@@ -1,4 +1,4 @@
-// Query handling for the PostgreSQL HTTP proxy server - generic implementation
+// Query handling for the PostgreSQL HTTP proxy server
 
 const { formatQueryResult, formatPostgresError } = require('./utils');
 
@@ -7,7 +7,7 @@ async function handleQuery(request, reply, pool, logger) {
   // Get client session from the request context
   const session = request.session;
 
-  let { sql, params = [], method = 'all' } = request.body;
+  const { sql, params = [], method = 'all' } = request.body;
   const rawTextOutput = request.headers['neon-raw-text-output'] === 'true';
   const arrayMode = request.headers['neon-array-mode'] === 'true';
 
@@ -35,7 +35,7 @@ async function handleQuery(request, reply, pool, logger) {
   }, 'Processing query');
 
   try {
-    // Execute the query
+    // Execute the query exactly as received
     const result = await pool.query(sql, params);
     
     // Store RETURNING values in session for future queries
