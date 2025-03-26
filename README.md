@@ -490,7 +490,17 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.2.6 (Latest)
+### Version 0.2.7 (Latest)
+
+This version adds enhanced Auth.js compatibility:
+
+- ✅ **Improved Array Handling**: Fixed `l.map is not a function` errors with safer array processing
+- ✅ **Robust Row Processing**: Added additional safety checks for Auth.js data structures
+- ✅ **Edge Case Handling**: Better handling of non-array row data that Auth.js might pass
+- ✅ **Enhanced Error Reporting**: Better context for connection and query errors
+- ✅ **Boundary Checks**: Added index bounds checking to prevent out-of-range errors
+
+### Version 0.2.6
 
 This version adds comprehensive array type parsing:
 

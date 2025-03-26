@@ -560,18 +560,33 @@ function processQueryResult(
   // Extract column names
   const colNames = fields.map((field: { name: string }) => field.name);
   
-  // Process rows with type parsers
-  const processedRows = arrayMode
-    ? rowsData.map((row: any[]) => 
-        row.map((val, i) => val === null ? null : parsers[i](val))
-      )
-    : rowsData.map((row: any[]) => {
-        const obj: Record<string, any> = {};
-        row.forEach((val, i) => {
-          obj[colNames[i]] = val === null ? null : parsers[i](val);
-        });
-        return obj;
-      });
+      // Process rows with type parsers - with additional safety checks for Auth.js compatibility
+      let processedRows: any[] = [];
+      
+      if (Array.isArray(rowsData)) {
+        processedRows = arrayMode
+          ? rowsData.map((row: any) => {
+              // Ensure row is an array before trying to map over it
+              if (!Array.isArray(row)) {
+                return row; // Return as is if not an array
+              }
+              return row.map((val, i) => val === null ? null : parsers[i](val));
+            })
+          : rowsData.map((row: any) => {
+              // Handle cases where row might not be an array (Auth.js sometimes sends objects directly)
+              if (!Array.isArray(row)) {
+                return row; // Return as is if not an array
+              }
+              
+              const obj: Record<string, any> = {};
+              row.forEach((val, i) => {
+                if (i < colNames.length) { // Ensure index is within bounds
+                  obj[colNames[i]] = val === null ? null : parsers[i](val);
+                }
+              });
+              return obj;
+            });
+      }
   
   // Return a complete result object
   return {
