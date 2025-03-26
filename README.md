@@ -1,4 +1,4 @@
-# Drizzle Edge PostgreSQL Proxy Client
+Drizzle Edge PostgreSQL Proxy Client
 
 [![npm version](https://img.shields.io/npm/v/drizzle-edge-pg-proxy-client.svg)](https://www.npmjs.com/package/drizzle-edge-pg-proxy-client)
 [![Build Status](https://img.shields.io/github/workflow/status/samuellembke/drizzle-edge-pg-proxy-client/CI)](https://github.com/samuellembke/drizzle-edge-pg-proxy-client/actions)
@@ -6,19 +6,18 @@
 
 A client library for connecting to PostgreSQL databases from edge environments (Cloudflare Workers, Vercel Edge Functions, Deno Deploy, etc.) via an HTTP proxy. This package is compatible with [Drizzle ORM](https://orm.drizzle.team/) and designed to work in all environments that support the Fetch API.
 
-> CURRENTLY BROKEN
-
 ## 🌟 Features
 
 - 🚀 **Edge-Ready**: Works in all edge environments with fetch API support
 - 🔌 **Drizzle ORM Compatible**: Drop-in replacement for Drizzle's PostgreSQL client
 - 🔒 **Secure**: Support for authentication via bearer token
-- 📦 **Lightweight**: Small bundle size, perfect for edge deployments
+- 📦 **Lightweight**: Small bundle size perfect for edge deployments
 - 📝 **TypeScript**: Full TypeScript support with proper type definitions
 - 🔄 **Transactions**: Support for running multiple queries in a transaction
 - 🧪 **Tested**: Comprehensive test suite for reliability
 - 📊 **Array Support**: Full PostgreSQL array parsing with element type awareness
 - 🔄 **Type System**: Comprehensive type system for PostgreSQL data types
+- 🔒 **Session Tracking**: Consistent session ID tracking for persistent connections
 
 ## 📋 Table of Contents
 
@@ -67,7 +66,7 @@ import { users } from './schema';
 const db = drizzle({
   proxyUrl: 'https://your-pg-proxy-url.com',
   authToken: 'your-secret-token', // Optional
-  schema: { users },
+  schema: { users }
 });
 
 // Use it like any other Drizzle client
@@ -80,7 +79,7 @@ export async function getUser(id: string) {
 
 ### Basic Usage with Drizzle ORM
 
-First, define your schema using Drizzle's schema definition:
+First define your schema using Drizzle's schema definition:
 
 ```typescript
 import { pgTable, serial, text, integer } from 'drizzle-orm/pg-core';
@@ -89,11 +88,11 @@ export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(),
   email: text('email').notNull().unique(),
-  age: integer('age'),
+  age: integer('age')
 });
 ```
 
-Then, create a Drizzle client and use it to query your database:
+Then create a Drizzle client and use it to query your database:
 
 ```typescript
 import { drizzle } from 'drizzle-edge-pg-proxy-client';
@@ -103,7 +102,7 @@ import { users } from './schema';
 const db = drizzle({
   proxyUrl: 'http://localhost:7432', // Use http:// for local development
   authToken: 'your-secret-token', // Optional
-  schema: { users },
+  schema: { users }
 });
 
 // Select all users
@@ -116,7 +115,7 @@ const user = await db.select().from(users).where(eq(users.id, 1));
 const newUser = await db.insert(users).values({
   name: 'Alice',
   email: 'alice@example.com',
-  age: 30,
+  age: 30
 }).returning();
 
 // Update a user
@@ -159,7 +158,7 @@ export const authConfig = {
     usersTable: users,
     accountsTable: accounts,
     sessionsTable: sessions,
-    verificationTokensTable: verificationTokens,
+    verificationTokensTable: verificationTokens
   }),
   // ...
 };
@@ -181,7 +180,7 @@ import { createPgHttpClient } from 'drizzle-edge-pg-proxy-client';
 
 const client = createPgHttpClient({
   proxyUrl: 'https://your-pg-proxy-url.com',
-  authToken: 'your-secret-token', // Optional
+  authToken: 'your-secret-token' // Optional
 });
 
 // Execute a query directly
@@ -201,7 +200,7 @@ The client also supports SQL template literals:
 import { createPgHttpClient } from 'drizzle-edge-pg-proxy-client';
 
 const client = createPgHttpClient({
-  proxyUrl: 'https://your-pg-proxy-url.com',
+  proxyUrl: 'https://your-pg-proxy-url.com'
 });
 
 const userId = 1;
@@ -220,11 +219,11 @@ You can also run multiple queries in a transaction:
 import { createPgHttpClient } from 'drizzle-edge-pg-proxy-client';
 
 const client = createPgHttpClient({
-  proxyUrl: 'https://your-pg-proxy-url.com',
+  proxyUrl: 'https://your-pg-proxy-url.com'
 });
 
 const results = await client.transaction([
-  { 
+  {
     text: 'INSERT INTO users (name, email) VALUES ($1, $2)',
     values: ['Alice', 'alice@example.com']
   },
@@ -251,6 +250,7 @@ function drizzle<TSchema extends Record<string, unknown>>(options: {
   arrayMode?: boolean;
   fullResults?: boolean;
   typeParser?: TypeParser | Record<number, (value: string) => any>;
+  sessionId?: string;
 }): PostgresJsDatabase<TSchema>
 ```
 
@@ -262,9 +262,10 @@ Creates a Drizzle ORM client connected to your PostgreSQL database via an HTTP p
   - `authToken` (optional): Authentication token for the proxy server
   - `schema`: Drizzle ORM schema definition
   - `fetch` (optional): Custom fetch implementation (uses global fetch by default)
-  - `arrayMode` (optional): When true, returns results as arrays instead of objects
-  - `fullResults` (optional): When true, returns complete result objects with metadata
+  - `arrayMode` (optional): When true returns results as arrays instead of objects
+  - `fullResults` (optional): When true returns complete result objects with metadata
   - `typeParser` (optional): Custom type parser instance or type parser configuration
+  - `sessionId` (optional): Explicit session ID for persistent connections (auto-generated if not provided)
 
 **Returns:** Drizzle ORM database client
 
@@ -280,6 +281,7 @@ interface ClientOptions {
   arrayMode?: boolean;
   fullResults?: boolean;
   typeParser?: TypeParser | Record<number, (value: string) => any>;
+  sessionId?: string;
 }
 ```
 
@@ -289,9 +291,10 @@ Creates a raw PostgreSQL HTTP client.
 - `proxyUrl`: URL of the PostgreSQL HTTP proxy server
 - `authToken` (optional): Authentication token for the proxy server
 - `fetch` (optional): Custom fetch implementation (uses global fetch by default)
-- `arrayMode` (optional): When true, returns results as arrays instead of objects
-- `fullResults` (optional): When true, returns complete result objects with metadata
+- `arrayMode` (optional): When true returns results as arrays instead of objects
+- `fullResults` (optional): When true returns complete result objects with metadata
 - `typeParser` (optional): Custom type parser instance or type parser configuration
+- `sessionId` (optional): Explicit session ID for persistent connections (auto-generated if not provided)
 
 **Returns:** A client with the following methods:
 - `execute(query: string, params?: unknown[]): Promise<PgQueryResult>`: Execute a SQL query with parameters
@@ -306,10 +309,10 @@ Creates a raw PostgreSQL HTTP client.
 ```typescript
 class TypeParser {
   constructor(customTypes?: Record<number, (value: string) => any>);
-  
+
   // Add or override a type parser
   setTypeParser(typeId: number, parseFn: (value: string) => any): void;
-  
+
   // Get a parser function for a specific type
   getTypeParser(typeId: number): (value: string) => any;
 }
@@ -378,7 +381,7 @@ enum PgTypeId {
 
 This client requires a PostgreSQL HTTP proxy server. You can implement your own, use the provided Docker implementation, or adapt one of the example implementations to your needs.
 
-> **New in v0.1.3**: Enhanced Auth.js (NextAuth.js) support with improved transaction handling, better error detection for null constraint violations, and detailed debugging for Auth.js operations. See the [Docker README](./docker/README.md) for more details.
+> **Updated in v0.3.3**: Enhanced Auth.js (NextAuth.js) support with session ID tracking, improved transaction handling, and better error detection for null constraint violations. See the [Docker README](./docker/README.md) for more details.
 
 A basic proxy implementation requires:
 
@@ -410,6 +413,7 @@ A basic proxy implementation requires:
    ```
 
 3. Authentication via bearer token (optional but recommended)
+4. Support for X-Session-ID header for persistent connections (added in v0.3.3)
 
 ### Docker Quick Start
 
@@ -427,7 +431,7 @@ docker-compose up -d
 
 Now you can connect to your proxy at `http://localhost:7432` and start using it with the client.
 
-For more information, see the [Docker README](./docker/README.md).
+For more information see the [Docker README](./docker/README.md).
 
 ### Deployment
 
@@ -490,7 +494,23 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.3.2 (Latest)
+### Version 0.3.3 (Latest)
+
+Complete rewrite of server implementation with enhanced session tracking and modularization:
+
+- ✅ **Session ID tracking**: Added X-Session-ID header for reliable client identification 
+- ✅ **UUID generation**: Automatic UUID generation for session IDs (just like Neon)
+- ✅ **Modular server architecture**: Split monolithic server into logical modules for better maintainability
+- ✅ **Enhanced DEFAULT handling**: Improved detection and substitution of DEFAULT keywords
+- ✅ **Improved transaction support**: Better context tracking across transaction steps
+- ✅ **Optimized Auth.js compatibility**: Specifically targeting Auth.js account linking patterns
+- ✅ **Improved error handling**: Better error reporting with session context
+
+This release provides complete compatibility with Neon's adapter for Auth.js integration. The session ID tracking ensures consistent client identification between requests, critical for Auth.js account linking operations.
+
+> **Important**: This version requires the updated PostgreSQL HTTP proxy (included in the Docker setup) that supports the X-Session-ID header.
+
+### Version 0.3.2
 
 Enhanced session context for improved Auth.js compatibility:
 
@@ -500,9 +520,7 @@ Enhanced session context for improved Auth.js compatibility:
 - ✅ **Improved handling of user IDs**: Better storage and retrieval of user IDs across session requests
 - ✅ **Fixed session tracking**: Resolves issues where session context wasn't properly maintained
 
-This version contains critical improvements to our session context handling. The core architecture remains the same as v0.3.1, but the implementation is now more robust and reliable. In particular, it properly maintains client identification between the first request (user creation) and second request (account linking) for Auth.js compatibility.
-
-> **Important**: To use this version, you must use the updated PostgreSQL HTTP proxy (v1.1.0+) that implements improved session context persistence.
+This version contains critical improvements to our session context handling. The core architecture remains the same as v0.3.1 but the implementation is now more robust and reliable. In particular it properly maintains client identification between the first request (user creation) and second request (account linking) for Auth.js compatibility.
 
 ### Version 0.3.1
 
@@ -578,7 +596,7 @@ This version provides significant improvements to match Neon's client interface:
 
 - ✅ **Enhanced Error Handling**: Added proper PostgreSQL error class with all standard Postgres error fields
 - ✅ **Improved SQL Processing**: Better handling of parameter binding and type detection
-- ✅ **Better Transaction Support**: Added support for transaction isolation levels, read-only and deferrable transactions
+- ✅ **Better Transaction Support**: Added support for transaction isolation levels, read-only, and deferrable transactions
 - ✅ **Binary Data Handling**: Improved handling of binary data with proper bytea conversion
 - ✅ **Format Compatibility**: Response format now exactly matches Neon's for better compatibility with Auth.js
 
@@ -599,7 +617,7 @@ This version provides significant improvements to match Neon's client interface:
 
 If you encounter an error like `ERR_SSL_WRONG_VERSION_NUMBER` when trying to connect to your PostgreSQL proxy, it usually indicates one of these issues:
 
-1. **Incorrect Protocol**: You're using `https://` when you should be using `http://` (or vice versa). In local development, use `http://`.
+1. **Incorrect Protocol**: You're using `https://` when you should be using `http://` (or vice versa). In local development use `http://`.
 
    ```typescript
    // Correct for local development
@@ -652,20 +670,20 @@ export const accounts = pgTable("account", {
 },
 (table) => {
   return {
-    pk: primaryKey({ columns: [table.provider, table.providerAccountId] }),
+    pk: primaryKey({ columns: [table.provider, table.providerAccountId] })
   };
 });
 
 // Define relations
 export const usersRelations = relations(users, ({ many }) => ({
-  accounts: many(accounts),
+  accounts: many(accounts)
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
   user: one(users, {
     fields: [accounts.userId],
-    references: [users.id],
-  }),
+    references: [users.id]
+  })
 }));
 ```
 
@@ -689,4 +707,3 @@ const db = drizzle({
   proxyUrl: 'http://localhost:7432',
   // ...
 });
-```
