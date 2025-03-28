@@ -474,11 +474,11 @@ This repository is configured for easy deployment with platforms like Coolify. T
 
 ### Example Proxy Implementations
 
-For other environments, we provide example implementations:
+The recommended proxy implementation uses Docker and Fastify for high performance and ease of setup:
 
-- **[Fastify (Docker)](./docker/)**: A high-performance proxy using Fastify and pg-native (recommended)
-- **[Node.js/Express](./examples/proxy/express-pg-proxy.js)**: A simple proxy using Express and node-postgres
-- **[Cloudflare Worker](./examples/proxy/cloudflare-worker-proxy.js)**: A serverless proxy for Cloudflare Workers
+- **[Fastify (Docker)](./docker/)**: High-performance proxy using Fastify and pg-native.
+
+*(Previous examples for Node.js/Express and Cloudflare Workers have been removed as the Docker implementation is the primary supported method.)*
 
 ## 📂 Examples
 
