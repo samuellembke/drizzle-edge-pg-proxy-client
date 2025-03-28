@@ -53,20 +53,21 @@ async function handleTransaction(request, reply, pool, logger) {
 
     // Process each query in sequence
     for (let i = 0; i < queries.length; i++) {
-      const query = queries[i];
-      const { sql, params = [], method = 'all' } = query;
+      const queryItem = queries[i];
+      // Expect 'query' field to match Neon protocol
+      const { query, params = [], method = 'all' } = queryItem; 
 
-      // Validate SQL
-      if (!sql) {
-        throw new Error(`Query at index ${i} is missing SQL statement`);
+      // Validate SQL query text
+      if (!query) { // Check for 'query' field
+        throw new Error(`Query at index ${i} is missing SQL statement (field: "query")`);
       }
 
       // Detect if this query has a RETURNING clause (potential source of values)
-      const hasReturning = sql?.toLowerCase().includes('returning');
+      const hasReturning = query?.toLowerCase().includes('returning'); // Use 'query' variable
 
       // Execute the query exactly as received
       logger.debug({
-        sql,
+        query, // Log 'query' field
         params,
         hasReturning,
         index: i,
@@ -74,12 +75,12 @@ async function handleTransaction(request, reply, pool, logger) {
         sessionId
       }, 'Executing query in transaction');
 
-      const result = await client.query(sql, params);
+      const result = await client.query(query, params); // Use 'query' variable
 
       // Capture values from RETURNING clause for use in later queries
       if (hasReturning && result.rows && result.rows.length > 0) {
         const row = result.rows[0]; // Use first row for captured values
-        const tableNameMatch = sql.match(/into\s+"([^"]+)"/i);
+        const tableNameMatch = query.match(/into\s+"([^"]+)"/i); // Use 'query' variable
 
         if (tableNameMatch && tableNameMatch[1]) {
           const tableName = tableNameMatch[1].toLowerCase();

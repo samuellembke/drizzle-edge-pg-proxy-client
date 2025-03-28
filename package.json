@@ -1,6 +1,6 @@
 {
   "name": "drizzle-edge-pg-proxy-client",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "PostgreSQL HTTP client compatible with Neon's interface for edge environments",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -61,6 +61,7 @@
     "@typescript-eslint/parser": "^8.28.0",
     "drizzle-orm": "^0.41.0",
     "eslint": "^8.57.0",
+    "pg": "^8.14.1",
     "tsup": "^8.4.0",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"

@@ -32,6 +32,9 @@ A client library for connecting to PostgreSQL databases from edge environments (
 - [API Reference](#-api-reference)
   - [drizzle](#drizzle)
   - [createPgHttpClient](#createpghttpclient)
+  - [Logging](#logging)
+  - [TypeParser](#typeparser)
+  - [PgTypeId](#pgtypeid)
 - [Setting Up a PostgreSQL HTTP Proxy](#-setting-up-a-postgresql-http-proxy)
   - [Docker Quick Start](#docker-quick-start)
 - [Examples](#-examples)
@@ -127,50 +130,6 @@ await db.update(users)
 await db.delete(users).where(eq(users.id, 1));
 ```
 
-### Using with Auth.js in Next.js
-
-This package can be used with Auth.js (formerly NextAuth.js) using the Drizzle adapter. Here's how to set it up:
-
-```typescript
-// src/server/db/index.ts
-import { drizzle } from 'drizzle-edge-pg-proxy-client';
-import * as schema from "./schema";
-
-// Make sure to use http:// for local development
-export const db = drizzle({
-  proxyUrl: process.env.DATABASE_PROXY_URL || 'http://localhost:7432',
-  authToken: process.env.DATABASE_PROXY_TOKEN,
-  schema
-});
-```
-
-Then in your Auth.js configuration:
-
-```typescript
-// src/server/auth/config.ts
-import { DrizzleAdapter } from "@auth/drizzle-adapter";
-import { db } from "../db";
-import { users, accounts, sessions, verificationTokens } from "../db/schema";
-
-export const authConfig = {
-  // Your other Auth.js config...
-  adapter: DrizzleAdapter(db, {
-    usersTable: users,
-    accountsTable: accounts,
-    sessionsTable: sessions,
-    verificationTokensTable: verificationTokens
-  }),
-  // ...
-};
-```
-
-**Important Note for Next.js Edge Runtime or Middleware**:
-If you're using this in the Edge Runtime or middleware, be aware that you need to:
-
-1. Use the correct URL protocol (http:// vs https://) depending on your environment.
-2. Make sure your PostgreSQL proxy is accessible from the edge environment.
-3. In development, use http:// for localhost connections.
-
 ### Raw SQL Queries
 
 If you prefer to use raw SQL queries, you can use the `createPgHttpClient` function:
@@ -251,6 +210,7 @@ function drizzle<TSchema extends Record<string, unknown>>(options: {
   fullResults?: boolean;
   typeParser?: TypeParser | Record<number, (value: string) => any>;
   sessionId?: string;
+  logger?: LoggerOptions; // Added in v0.4.0
 }): PostgresJsDatabase<TSchema>
 ```
 
@@ -282,6 +242,20 @@ interface ClientOptions {
   fullResults?: boolean;
   typeParser?: TypeParser | Record<number, (value: string) => any>;
   sessionId?: string;
+  logger?: LoggerOptions; // Added in v0.4.0
+}
+
+interface LoggerOptions {
+  level?: LogLevel; // Default: LogLevel.Warn
+  logFn?: (level: LogLevel, message: string, data?: any) => void; // Default: console.log/warn/error
+}
+
+enum LogLevel {
+  Debug = 1,
+  Info = 2,
+  Warn = 3,
+  Error = 4,
+  None = 5,
 }
 ```
 
@@ -302,7 +276,52 @@ Creates a raw PostgreSQL HTTP client.
 - `transaction(queries: { text: string, values: unknown[] }[], options?): Promise<PgQueryResult[]>`: Execute multiple queries in a transaction
 - `query(query: string, params?: unknown[], options?): Promise<PgQueryResult>`: Direct query execution with options
 - `unsafe(rawSql: string): UnsafeRawSql`: Create unsafe raw SQL for trusted inputs
-- `typeParser`: Access to the type parser instance for custom type handling
+// - `typeParser`: Access to the type parser instance (currently not exposed)
+
+### Logging
+
+Added in v0.4.0
+
+You can configure logging by passing a `logger` object in the `ClientOptions`.
+
+```typescript
+import { createPgHttpClient, LogLevel } from 'drizzle-edge-pg-proxy-client';
+
+// Example 1: Set minimum log level to Debug
+const client1 = createPgHttpClient({
+  proxyUrl: '...',
+  logger: {
+    level: LogLevel.Debug,
+  }
+});
+
+// Example 2: Use a custom logging function (e.g., with a dedicated logging library)
+const client2 = createPgHttpClient({
+  proxyUrl: '...',
+  logger: {
+    level: LogLevel.Info,
+    logFn: (level, message, data) => {
+      // myLogger.log(LogLevel[level], message, data);
+      console.log(`[CUSTOM LOGGER][${LogLevel[level]}] ${message}`, data ? { data } : '');
+    }
+  }
+});
+
+// Example 3: Disable logging entirely
+const client3 = createPgHttpClient({
+  proxyUrl: '...',
+  logger: {
+    level: LogLevel.None,
+  }
+});
+```
+
+**Log Levels:**
+- `LogLevel.Debug` (1)
+- `LogLevel.Info` (2)
+- `LogLevel.Warn` (3) - Default
+- `LogLevel.Error` (4)
+- `LogLevel.None` (5) - Disables logging
 
 ### TypeParser
 
@@ -494,7 +513,13 @@ MIT
 
 ## 📋 Changelog
 
-### Version 0.3.3 (Latest)
+### Version 0.4.0 (Latest)
+
+- **Refactor**: Split client code (`pg-http-client.ts`) into multiple modules (`types.ts`, `errors.ts`, `parsing.ts`, `utils.ts`, `query-promise.ts`, `index.ts`) for better organization and maintainability.
+- **Feature**: Added configurable logging to the client (`createPgHttpClient`). Users can now set log levels (`Debug`, `Info`, `Warn`, `Error`, `None`) and provide a custom logging function via the `logger` option.
+- **Fix**: Corrected payload field name inconsistency (`sql` vs `query`) between client and proxy handlers to align more closely with Neon's protocol.
+
+### Version 0.3.3
 
 Complete rewrite of server implementation with enhanced session tracking and modularization:
 
@@ -512,104 +537,13 @@ This release provides complete compatibility with Neon's adapter for Auth.js int
 
 ### Version 0.3.2
 
-Enhanced session context for improved Auth.js compatibility:
-
-- ✅ **More robust client identification**: Improved client identification across separate HTTP requests
-- ✅ **Enhanced session persistence**: Better handling of client session data particularly for Auth.js
-- ✅ **Database fallback for Auth.js**: Added fallback mechanism to look up users when session context is lost
-- ✅ **Improved handling of user IDs**: Better storage and retrieval of user IDs across session requests
-- ✅ **Fixed session tracking**: Resolves issues where session context wasn't properly maintained
-
-This version contains critical improvements to our session context handling. The core architecture remains the same as v0.3.1 but the implementation is now more robust and reliable. In particular it properly maintains client identification between the first request (user creation) and second request (account linking) for Auth.js compatibility.
+Enhanced session context for improved Auth.js compatibility.
 
 ### Version 0.3.1
 
-Initial session context implementation:
+Initial session context implementation.
 
-### Version 0.3.0
-
-Initial server-side transaction context implementation:
-
-### Version 0.2.11
-
-Targeted Auth.js compatibility approach:
-
-### Version 0.2.10
-
-Modified transaction handling with focus on standard behavior:
-
-- ✅ **Native PostgreSQL Approach**: Maintained standard PostgreSQL behavior for most DEFAULT keywords
-- ✅ **Query Preservation**: Transmitted SQL statements with minimal client-side manipulation
-- ✅ **Broad Compatibility**: Improved reliability across various ORM patterns
-
-### Version 0.2.9
-
-Added transaction enhancements that were later simplified:
-
-- ✅ **ID Capturing**: Automatic detection of generated IDs from INSERT...RETURNING statements
-- ✅ **DEFAULT Handling**: Added DEFAULT keyword handling for foreign key relationships
-- ✅ **Pattern Recognition**: Foreign key relationship detection through column naming patterns
-
-### Version 0.2.8
-
-Previous version with basic ID propagation in transactions:
-
-- ✅ **Generated ID Extraction**: Added automatic ID extraction from INSERT queries with RETURNING
-- ✅ **Transaction Integration**: Propagates generated IDs between transaction steps
-- ✅ **DEFAULT Keyword Support**: Support for SQL's DEFAULT keyword replacement
-- ✅ **Foreign Key Handling**: Handling of foreign key references in multi-step transactions
-- ✅ **Debugging Support**: Added logging to aid in troubleshooting transaction issues
-
-### Version 0.2.7
-
-This version added enhanced Auth.js compatibility:
-
-- ✅ **Improved Array Handling**: Fixed `l.map is not a function` errors with safer array processing
-- ✅ **Robust Row Processing**: Added additional safety checks for Auth.js data structures
-- ✅ **Edge Case Handling**: Better handling of non-array row data that Auth.js might pass
-- ✅ **Enhanced Error Reporting**: Better context for connection and query errors
-- ✅ **Boundary Checks**: Added index bounds checking to prevent out-of-range errors
-
-### Version 0.2.6
-
-This version adds comprehensive array type parsing:
-
-- ✅ **PostgreSQL Array Support**: Added robust array parsing with element type awareness
-- ✅ **Multi-dimensional Arrays**: Support for nested arrays of any depth
-- ✅ **Type-Aware Parsing**: Each array element is converted to the appropriate JavaScript type
-- ✅ **Comprehensive Testing**: Added extensive tests for array parsing functionality
-- ✅ **Auth.js Compatibility**: Improved compatibility with Auth.js's array-based data models
-
-### Version 0.2.1
-
-This version adds comprehensive type system support:
-
-- ✅ **TypeParser Class**: Added a robust type parser system for PostgreSQL data types
-- ✅ **Custom Type Parsers**: Support for user-defined type parsers
-- ✅ **Default Parsers**: Built-in parsers for common PostgreSQL types (numeric, date/time, JSON, etc.)
-- ✅ **Query Result Processing**: Automatic type conversion of query results based on column data types
-- ✅ **Advanced Configuration**: New options for array mode and full results format
-
-### Version 0.2.0
-
-This version provides significant improvements to match Neon's client interface:
-
-- ✅ **Enhanced Error Handling**: Added proper PostgreSQL error class with all standard Postgres error fields
-- ✅ **Improved SQL Processing**: Better handling of parameter binding and type detection
-- ✅ **Better Transaction Support**: Added support for transaction isolation levels, read-only, and deferrable transactions
-- ✅ **Binary Data Handling**: Improved handling of binary data with proper bytea conversion
-- ✅ **Format Compatibility**: Response format now exactly matches Neon's for better compatibility with Auth.js
-
-### Version 0.1.9
-
-- Fixed compatibility issues with Auth.js by ensuring the query method is properly exposed and bound
-- Fixed parameter binding in SQL templating to match Neon's interface
-
-### Version 0.1.3
-
-- Enhanced Auth.js support with better transaction handling
-- Improved error detection for null constraint violations
-- Added detailed debugging for Auth.js operations
+*(Older versions omitted for brevity)*
 
 ## 🔧 Troubleshooting
 
@@ -633,22 +567,21 @@ If you encounter an error like `ERR_SSL_WRONG_VERSION_NUMBER` when trying to con
 
 ### Auth.js DrizzleAdapter Errors
 
+*(Note: As of v0.4.0, specific Auth.js patterns involving `DEFAULT` on foreign keys might not work out-of-the-box due to standard PostgreSQL behavior. See below.)*
+
 If you encounter errors with the Auth.js DrizzleAdapter like "Unsupported database type", make sure:
 
 1. You're using the correct version of `@auth/drizzle-adapter` that's compatible with your Auth.js version
 2. The adapter has correct table configurations
 3. The database client is correctly initialized before the adapter
 
-If you encounter foreign key constraint errors such as `null value in column "user_id" of relation "account" violates not-null constraint`, this indicates that your proxy implementation isn't correctly handling transactions with RETURNING clauses. Auth.js typically:
+If you encounter foreign key constraint errors such as `null value in column "user_id" of relation "account" violates not-null constraint`, this typically indicates that the SQL pattern being used relies on non-standard database behavior. Standard PostgreSQL interprets `DEFAULT` on a foreign key column (without a database-level default) as `NULL`, leading to this error. Auth.js's pattern sometimes uses `DEFAULT` expecting it to link to a previously inserted user ID within the same transaction.
 
-1. Creates a user record with a RETURNING clause to get the user ID
-2. Uses that ID to create related records (accounts, sessions)
+This client and the provided proxy execute SQL according to standard PostgreSQL behavior. If you encounter this error:
 
-To fix this issue:
-
-1. Ensure your PostgreSQL proxy properly handles RETURNING clauses in SQL queries
-2. Properly returns results from transactions in sequence
-3. Check your schema to ensure foreign key constraints match what Auth.js expects:
+1.  **Verify the SQL:** Check the exact SQL queries being generated by Auth.js/Drizzle.
+2.  **Consider Adapter/Library Update:** Check if newer versions of `@auth/drizzle-adapter` or Auth.js generate standard-compliant SQL (explicitly using the returned `user_id` instead of `DEFAULT`).
+3.  **Schema Check:** Ensure your schema foreign key constraints are correctly defined:
 
 ```typescript
 // Example of proper Auth.js schema with Drizzle

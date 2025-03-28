@@ -1,4 +1,5 @@
-import { drizzle, createPgHttpClient } from '../src';
+import { createPgHttpClient, LogLevel } from '../../src/client'; // Import client factory and LogLevel
+import { drizzle } from '../../src/drizzle'; // Import drizzle wrapper separately
 // These imports are needed only for TypeScript type definitions
 import { sql } from 'drizzle-orm';
 import { integer, pgTable, serial, text } from 'drizzle-orm/pg-core';
@@ -16,6 +17,8 @@ const db = drizzle({
   proxyUrl: 'https://your-pg-proxy-url.com',
   authToken: 'your-secret-token',
   schema: { users },
+  // Example: Enable Debug logging
+  logger: { level: LogLevel.Debug }
 });
 
 // Example of using Drizzle ORM
@@ -36,6 +39,13 @@ async function rawSqlExample() {
   const client = createPgHttpClient({
     proxyUrl: 'https://your-pg-proxy-url.com',
     authToken: 'your-secret-token',
+    // Example: Use a custom logger function
+    logger: {
+      level: LogLevel.Info,
+      logFn: (level, message, data) => {
+        console.log(`[CUSTOM BASIC][${LogLevel[level]}] ${message}`, data ? { data } : '');
+      }
+    }
   });
 
   // Direct query execution
@@ -43,8 +53,8 @@ async function rawSqlExample() {
   console.log('All users:', allUsers);
 
   // SQL template literals
-  const user = await client.sql`SELECT * FROM users WHERE id = ${1}`.execute();
-  console.log('User with ID 1:', user[0]);
+  const userResult = await client.sql`SELECT * FROM users WHERE id = ${1}`; // Await the QueryPromise directly
+  console.log('User with ID 1:', userResult.rows[0]); // Access rows from the result
 
   // Transactions
   const results = await client.transaction([

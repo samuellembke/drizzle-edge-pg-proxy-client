@@ -7,12 +7,13 @@ async function handleQuery(request, reply, pool, logger) {
   // Get client session from the request context
   const session = request.session;
 
-  const { sql, params = [], method = 'all' } = request.body;
+  // Expect 'query' field to match Neon protocol
+  const { query, params = [], method = 'all' } = request.body; 
   const rawTextOutput = request.headers['neon-raw-text-output'] === 'true';
   const arrayMode = request.headers['neon-array-mode'] === 'true';
 
-  if (!sql) {
-    return reply.code(400).send({ error: 'SQL query is required' });
+  if (!query) { // Check for 'query' field
+    return reply.code(400).send({ error: 'SQL query (field: "query") is required' });
   }
 
   // Check if the method is valid
@@ -21,14 +22,14 @@ async function handleQuery(request, reply, pool, logger) {
   }
 
   // Check if this is a RETURNING query to track result values
-  const hasReturning = sql.toLowerCase().includes('returning');
+  const hasReturning = query.toLowerCase().includes('returning'); // Use 'query' variable
 
   // Process session values for tracking
   const sessionId = request.headers['x-session-id'];
   
   // Log the query with important session context
   logger.debug({ 
-    sql, 
+    query, // Log 'query' field
     params, 
     sessionId,
     sessionStorageSize: session.returningValues.size
@@ -36,14 +37,14 @@ async function handleQuery(request, reply, pool, logger) {
 
   try {
     // Execute the query exactly as received
-    const result = await pool.query(sql, params);
+    const result = await pool.query(query, params); // Use 'query' variable
     
     // Store RETURNING values in session for future queries
     if (hasReturning && result.rows && result.rows.length > 0) {
       try {
         // Extract table name from query for context
         let tableName = '';
-        const tableMatch = sql.match(/into\s+"([^"]+)"/i);
+        const tableMatch = query.match(/into\s+"([^"]+)"/i); // Use 'query' variable
         if (tableMatch && tableMatch[1]) {
           tableName = tableMatch[1].toLowerCase();
           
@@ -98,7 +99,7 @@ async function handleQuery(request, reply, pool, logger) {
     // Log error with detailed information
     logger.error({ 
       error, 
-      sql, 
+      query, // Log 'query' field
       params,
       errorCode: error.code,
       errorTable: error.table,
