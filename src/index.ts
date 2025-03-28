@@ -18,6 +18,7 @@ export {
   type PgField,
   type ParameterizedQuery,
   type SQLTemplateTag,
-  type ClientOptions
-} from './client/pg-http-client';
+  type ClientOptions,
+  LogLevel // Also export LogLevel enum
+} from './client'; // Changed path to import from client directory index
 export * from './types';

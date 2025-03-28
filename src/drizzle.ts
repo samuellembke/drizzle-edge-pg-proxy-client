@@ -1,5 +1,6 @@
 import { drizzle as drizzleOrm } from 'drizzle-orm/neon-http';
-import { createPgHttpClient, TypeParser } from './client/pg-http-client';
+import { createPgHttpClient, TypeParser, LogLevel } from './client'; // Updated import path
+import type { LoggerOptions } from './client'; // Correct: LoggerOptions is a type
 
 /**
  * Creates a Drizzle client connecting to PostgreSQL via HTTP proxy.
@@ -16,15 +17,17 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
   arrayMode?: boolean;
   fullResults?: boolean;
   typeParser?: TypeParser | Record<number, (value: string) => any>;
+  logger?: LoggerOptions; // Add logger option
 }) {
-  const { 
-    proxyUrl, 
+  const {
+    proxyUrl,
     authToken, 
     schema, 
     fetch, 
     arrayMode = false,
     fullResults = false,
-    typeParser 
+    typeParser,
+    logger // Destructure logger
   } = options;
 
   // Create our custom HTTP client that mirrors Neon's client interface exactly
@@ -34,7 +37,8 @@ export function drizzle<TSchema extends Record<string, unknown>>(options: {
     fetch,
     arrayMode,
     fullResults,
-    typeParser
+    typeParser,
+    logger // Pass logger option
   });
 
   // Create a drizzle instance using our client

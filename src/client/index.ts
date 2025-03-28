@@ -24,15 +24,17 @@ import {
 
 // Re-export core types and classes for external use
 export { PgError } from './errors';
-export { UnsafeRawSql } from './utils'; // QueryPromise removed from here
-export { QueryPromise } from './query-promise'; // Export QueryPromise from its new file
+export { UnsafeRawSql } from './utils';
+export { QueryPromise } from './query-promise';
 export { TypeParser, PgTypeId } from './parsing';
+export { LogLevel } from './types'; // Export LogLevel enum as value
 export type {
   PgQueryResult,
   PgField,
   ParameterizedQuery,
   TransactionQuery,
   ClientOptions,
+  LoggerOptions, // Export LoggerOptions type
   SQLTemplateTag
 } from './types';
 
@@ -355,12 +357,12 @@ export function createPgHttpClient({
 
   // Return the client interface matching Neon's http client
   return {
-    // execute, // Keep execute internal for now unless needed externally
+    execute,      // Expose execute method
     query,        // Direct query method
     sql,          // SQL template tag
     unsafe,       // For unsafe raw SQL
     transaction,  // For transactions
     // Expose typeParser if users need to interact with it directly
-    // typeParser,
+    typeParser,
   };
 }
